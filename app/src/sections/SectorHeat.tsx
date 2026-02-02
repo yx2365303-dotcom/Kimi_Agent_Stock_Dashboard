@@ -95,7 +95,7 @@ export function SectorHeat() {
         <TabsContent value="industry" className="mt-4">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* 涨幅榜 */}
-            <Card className="p-4">
+            <Card className="p-4 self-start">
               <div className="flex items-center gap-2 mb-4">
                 <TrendingUp className="w-5 h-5 text-red-600" />
                 <h3 className="text-lg font-semibold text-slate-900">涨幅榜</h3>
@@ -142,7 +142,7 @@ export function SectorHeat() {
             </Card>
 
             {/* 跌幅榜 */}
-            <Card className="p-4">
+            <Card className="p-4 self-start">
               <div className="flex items-center gap-2 mb-4">
                 <TrendingDown className="w-5 h-5 text-green-600" />
                 <h3 className="text-lg font-semibold text-slate-900">跌幅榜</h3>
