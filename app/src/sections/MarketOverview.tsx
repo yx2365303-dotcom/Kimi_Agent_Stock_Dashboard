@@ -8,8 +8,10 @@ import { SectorList } from '@/components/stock/SectorList';
 import { NorthFlowCard } from '@/components/stock/NorthFlowCard';
 import { Card } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Clock, RefreshCw } from 'lucide-react';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Clock, TrendingUp, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { cn, getChangeColor } from '@/lib/utils';
 import { 
   fetchIndices,
   fetchHotSectors,
@@ -37,19 +39,6 @@ interface UpDownDistributionData {
   limit_up: number;
   limit_down: number;
   distribution: { range: string; count: number; type: 'limit_up' | 'up' | 'flat' | 'down' | 'limit_down' }[];
-  // 新增字段
-  lianbanStats?: {
-    oneBoard: number;
-    twoBoard: number;
-    threeBoard: number;
-    fourBoard: number;
-    fivePlus: number;
-  };
-  zhabanCount?: number;
-  fengbanRate?: number;
-  topIndustries?: { name: string; count: number }[];
-  maxLianban?: number;
-  totalAttempts?: number;
 }
 
 interface HsgtItem {
@@ -142,7 +131,7 @@ export function MarketOverview() {
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-xl font-bold text-slate-900">市场概览</h2>
-          <div className="text-sm text-slate-600">正在加载数据...</div>
+          <div className="text-sm text-slate-500">正在加载数据...</div>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
           {Array.from({ length: 5 }).map((_, i) => (
@@ -163,7 +152,7 @@ export function MarketOverview() {
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-bold text-slate-900">市场概览</h2>
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1 text-sm text-slate-600">
+          <div className="flex items-center gap-1 text-sm text-slate-500">
             <Clock className="w-4 h-4" />
             <span>更新时间: {updateTime}</span>
           </div>
@@ -186,48 +175,38 @@ export function MarketOverview() {
             <IndexCard key={index.code} data={index} />
           ))
         ) : (
-          <div className="col-span-5 text-center py-8 text-slate-600">
+          <div className="col-span-5 text-center py-8 text-slate-500">
             暂无指数数据
           </div>
         )}
       </div>
 
-      {/* 涨跌分布 + 北向资金 */}
+      {/* 涨跌分布 + 北向资金流向 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {upDownDistribution ? (
-          <UpDownDistribution data={upDownDistribution} />
+          <UpDownDistribution data={upDownDistribution} className="min-h-[480px]" />
         ) : (
-          <Card className="p-4 border-slate-200">
+          <Card className="p-4 border-slate-200 min-h-[480px]">
             <h3 className="text-lg font-semibold text-slate-900 mb-4">涨跌分布</h3>
-            <div className="h-48 flex items-center justify-center text-slate-600">
+            <div className="h-48 flex items-center justify-center text-slate-500">
               暂无数据
             </div>
           </Card>
         )}
         {northFlow ? (
-          <NorthFlowCard data={northFlow} />
+          <MoneyFlowChart data={northFlow} className="min-h-[480px]" />
         ) : (
-          <Card className="p-4 border-slate-200">
-            <h3 className="text-lg font-semibold text-slate-900 mb-4">北向资金</h3>
-            <div className="h-48 flex items-center justify-center text-slate-600">
+          <Card className="p-4 border-slate-200 min-h-[480px]">
+            <h3 className="text-lg font-semibold text-slate-900 mb-4">北向资金流向</h3>
+            <div className="h-48 flex items-center justify-center text-slate-500">
               暂无数据
             </div>
           </Card>
         )}
       </div>
 
-      {/* 北向资金图表 + 市场情绪 */}
+      {/* 市场情绪 + 涨跌停统计 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {northFlow ? (
-          <MoneyFlowChart data={northFlow} />
-        ) : (
-          <Card className="p-4 border-slate-200">
-            <h3 className="text-lg font-semibold text-slate-900 mb-4">资金流向</h3>
-            <div className="h-48 flex items-center justify-center text-slate-500">
-              暂无数据
-            </div>
-          </Card>
-        )}
         {sentiment ? (
           <MarketSentimentCard data={sentiment} />
         ) : (
@@ -238,53 +217,74 @@ export function MarketOverview() {
             </div>
           </Card>
         )}
-      </div>
-
-      {/* 涨跌停统计 */}
-      {limitUpList.length > 0 && upDownDistribution && (
-        <LimitUpStats 
-          limitUpList={limitUpList}
-          limitUpCount={upDownDistribution.limit_up}
-          limitDownCount={upDownDistribution.limit_down}
-          brokenCount={12}
-          maxLimitCount={5}
-        />
-      )}
-
-      {/* 板块排行 + 沪深股通 */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <SectorList 
-          sectors={sectors.filter(s => s.pct_change > 0).slice(0, 10)} 
-          title="涨幅榜"
-        />
-        <Card className="p-4 border-slate-200">
-          <h3 className="text-lg font-semibold text-slate-900 mb-4">沪深股通 Top10</h3>
-          {hsgtTop10.length > 0 ? (
-            <div className="space-y-1">
-              {hsgtTop10.slice(0, 10).map((item) => (
-                <div key={item.ts_code} className="flex items-center justify-between p-2 rounded-lg bg-slate-50">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-slate-900">{item.name}</span>
-                    <span className="text-xs text-slate-500">{item.ts_code}</span>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className={`text-sm font-mono ${item.change >= 0 ? 'text-red-600' : 'text-green-600'}`}>
-                      {item.change >= 0 ? '+' : ''}{item.change.toFixed(2)}%
-                    </span>
-                    <span className="text-sm text-slate-600 font-mono">
-                      {(item.amount / 100000000).toFixed(2)}亿
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
+        {limitUpList.length > 0 && upDownDistribution ? (
+          <LimitUpStats 
+            limitUpList={limitUpList}
+            limitUpCount={upDownDistribution.limit_up}
+            limitDownCount={upDownDistribution.limit_down}
+            brokenCount={12}
+            maxLimitCount={5}
+          />
+        ) : (
+          <Card className="p-4 border-slate-200">
+            <h3 className="text-lg font-semibold text-slate-900 mb-4">涨跌停统计</h3>
             <div className="h-48 flex items-center justify-center text-slate-500">
               暂无数据
             </div>
-          )}
-        </Card>
+          </Card>
+        )}
       </div>
+
+      {/* 板块涨幅榜 + 板块跌幅榜 */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <SectorList 
+          sectors={sectors.filter(s => s.pct_change > 0).slice(0, 10)} 
+          title="板块涨幅榜"
+          type="up"
+        />
+        <SectorList 
+          sectors={sectors.filter(s => s.pct_change < 0).sort((a, b) => a.pct_change - b.pct_change).slice(0, 10)} 
+          title="板块跌幅榜"
+          type="down"
+        />
+      </div>
+
+      {/* 沪深股通 Top10 */}
+      <Card className="p-4 border-slate-200">
+        <h3 className="text-lg font-semibold text-slate-900 mb-4">沪深股通 Top10</h3>
+        {hsgtTop10.length > 0 ? (
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+            {hsgtTop10.slice(0, 10).map((item, index) => (
+              <div 
+                key={item.ts_code} 
+                className="p-3 rounded-lg bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                <div className="flex items-center gap-2 mb-2">
+                  <span className={cn(
+                    'w-5 h-5 flex items-center justify-center text-xs font-bold rounded',
+                    index < 3 ? 'bg-yellow-100 text-yellow-700' : 'text-slate-500'
+                  )}>
+                    {index + 1}
+                  </span>
+                  <span className="text-sm font-medium text-slate-900 truncate">{item.name}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className={cn('text-sm font-mono font-medium', getChangeColor(item.change))}>
+                    {item.change >= 0 ? '+' : ''}{item.change.toFixed(2)}%
+                  </span>
+                  <span className="text-xs text-slate-500 font-mono">
+                    {(item.amount / 100000000).toFixed(1)}亿
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="h-32 flex items-center justify-center text-slate-500">
+            暂无数据
+          </div>
+        )}
+      </Card>
     </div>
   );
 }

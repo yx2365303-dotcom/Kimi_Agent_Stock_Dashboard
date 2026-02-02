@@ -9,16 +9,19 @@ interface SectorListProps {
   title?: string;
   className?: string;
   showHeat?: boolean;
+  type?: 'up' | 'down'; // 涨幅榜或跌幅榜
 }
 
-export function SectorList({ sectors, title = '板块排行', className, showHeat = true }: SectorListProps) {
+export function SectorList({ sectors, title = '板块排行', className, showHeat = true, type = 'up' }: SectorListProps) {
+  const isDownList = type === 'down';
+  
   return (
     <Card className={cn('p-4', className)}>
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-semibold text-slate-900">{title}</h3>
       </div>
 
-      <ScrollArea className="h-64">
+      <ScrollArea className="max-h-100">
         <div className="space-y-1">
           {sectors.map((sector, index) => (
             <div 
@@ -33,7 +36,7 @@ export function SectorList({ sectors, title = '板块排行', className, showHea
                   {index + 1}
                 </span>
                 <span className="text-sm font-medium text-slate-900">{sector.name}</span>
-                {showHeat && sector.heat_score >= 80 && (
+                {showHeat && !isDownList && sector.heat_score >= 80 && (
                   <Flame className="w-3 h-3 text-red-600" />
                 )}
               </div>
@@ -44,7 +47,7 @@ export function SectorList({ sectors, title = '板块排行', className, showHea
                     {formatPercent(sector.pct_change)}
                   </div>
                   <div className="text-xs text-slate-500">
-                    {sector.limit_up_count}只涨停
+                    {isDownList ? `${sector.down_count}只跌停` : `${sector.limit_up_count}只涨停`}
                   </div>
                 </div>
                 

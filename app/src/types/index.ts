@@ -51,6 +51,7 @@ export interface SectorData {
   limit_up_count: number;
   net_inflow: number;
   heat_score: number;
+  turnover_rate?: number; // 换手率
 }
 
 // 资金流向

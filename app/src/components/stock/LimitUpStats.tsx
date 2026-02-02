@@ -57,17 +57,17 @@ export function LimitUpStats({
       </div>
 
       <div className="space-y-2">
-        <div className="flex items-center justify-between text-sm text-slate-500 px-2">
+        <div className="grid grid-cols-[1fr_100px_80px] items-center text-sm text-slate-500 px-2">
           <span>股票名称</span>
-          <span>涨停时间</span>
-          <span>连板</span>
+          <span className="text-center">涨停时间</span>
+          <span className="text-right">连板</span>
         </div>
         <ScrollArea className="h-48">
           <div className="space-y-1">
             {limitUpList.map((stock) => (
               <div 
                 key={stock.ts_code}
-                className="flex items-center justify-between p-2 rounded-lg bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer"
+                className="grid grid-cols-[1fr_100px_80px] items-center p-2 rounded-lg bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer"
               >
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium text-slate-900">{stock.name}</span>
@@ -78,8 +78,8 @@ export function LimitUpStats({
                     </span>
                   )}
                 </div>
-                <span className="text-xs text-slate-500 font-mono">{stock.first_time}</span>
-                <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-500 font-mono text-center">{stock.first_time}</span>
+                <div className="flex items-center justify-end gap-2">
                   <span className="text-xs text-slate-500">{stock.limit_times}板</span>
                   {stock.open_times > 0 && (
                     <span className="text-xs text-yellow-600">炸{stock.open_times}</span>
