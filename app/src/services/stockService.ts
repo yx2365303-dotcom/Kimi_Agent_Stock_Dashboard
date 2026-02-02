@@ -112,14 +112,28 @@ export async function fetchIndices(): Promise<IndexData[]> {
     
     if (data && data.length > 0) {
       // 按 ts_code 分组，取每个指数最新的一条
-      const latestByCode = new Map<string, typeof data[0]>();
-      data.forEach(item => {
+      type IndexDailyRow = {
+        ts_code: string;
+        trade_date: string;
+        close: number;
+        open: number;
+        change: number;
+        pct_chg: number;
+        vol: number;
+        amount: number;
+        high: number;
+        low: number;
+        pre_close: number;
+      };
+      const typedData = data as IndexDailyRow[];
+      const latestByCode = new Map<string, IndexDailyRow>();
+      typedData.forEach(item => {
         if (!latestByCode.has(item.ts_code)) {
           latestByCode.set(item.ts_code, item);
         }
       });
       
-      console.log(`获取到 ${latestByCode.size} 个指数的最新数据，日期: ${data[0].trade_date}`);
+      console.log(`获取到 ${latestByCode.size} 个指数的最新数据，日期: ${typedData[0].trade_date}`);
       
       return Array.from(latestByCode.values()).map((item: {
         ts_code: string;
@@ -206,11 +220,13 @@ export async function fetchHotSectors(limit = 10): Promise<SectorData[]> {
     
     if (dailyData && dailyData.length > 0) {
       // 获取最新日期
-      const latestDate = dailyData[0].trade_date;
+      type ThsDailyRow = { ts_code: string; trade_date: string; pct_change: number; vol: number; close: number };
+      const typedDailyData = dailyData as ThsDailyRow[];
+      const latestDate = typedDailyData[0].trade_date;
       console.log(`使用交易日 ${latestDate} 的板块数据`);
       
       // 只保留最新日期的数据，并按涨跌幅排序
-      const latestData = dailyData
+      const latestData = typedDailyData
         .filter(item => item.trade_date === latestDate)
         .sort((a, b) => (b.pct_change || 0) - (a.pct_change || 0))
         .slice(0, limit);
@@ -357,8 +373,22 @@ export async function fetchLimitUpList(limit = 20): Promise<LimitUpData[]> {
     
     if (data && data.length > 0) {
       // 获取最新日期的数据
-      const latestDate = data[0].trade_date;
-      const latestData = data.filter(item => item.trade_date === latestDate).slice(0, limit);
+      type LimitListRow = {
+        ts_code: string;
+        name: string;
+        trade_date: string;
+        close: number;
+        pct_chg: number;
+        limit_amount: number | null;
+        first_time: string;
+        last_time: string;
+        open_times: number;
+        limit_times: number;
+        industry: string;
+      };
+      const typedData = data as LimitListRow[];
+      const latestDate = typedData[0].trade_date;
+      const latestData = typedData.filter(item => item.trade_date === latestDate).slice(0, limit);
       
       console.log(`使用交易日 ${latestDate} 的涨停数据，共 ${latestData.length} 条`);
       return latestData.map((item: {
@@ -419,8 +449,22 @@ export async function fetchLimitDownList(limit = 20): Promise<LimitUpData[]> {
     }
     
     if (data && data.length > 0) {
-      const latestDate = data[0].trade_date;
-      const latestData = data.filter(item => item.trade_date === latestDate).slice(0, limit);
+      type LimitListRow = {
+        ts_code: string;
+        name: string;
+        trade_date: string;
+        close: number;
+        pct_chg: number;
+        limit_amount: number | null;
+        first_time: string;
+        last_time: string;
+        open_times: number;
+        limit_times: number;
+        industry: string;
+      };
+      const typedData = data as LimitListRow[];
+      const latestDate = typedData[0].trade_date;
+      const latestData = typedData.filter(item => item.trade_date === latestDate).slice(0, limit);
       
       console.log(`使用交易日 ${latestDate} 的跌停数据`);
       return latestData.map((item: {
@@ -480,7 +524,7 @@ export async function fetchUpDownDistribution() {
       return null;
     }
     
-    const latestDate = latestData[0].trade_date;
+    const latestDate = (latestData as { trade_date: string }[])[0].trade_date;
     
     // 从 daily 表获取真实的涨跌平统计
     const { data: dailyLatest } = await supabaseStock
@@ -489,7 +533,7 @@ export async function fetchUpDownDistribution() {
       .order('trade_date', { ascending: false })
       .limit(1);
     
-    const dailyDate = dailyLatest?.[0]?.trade_date || latestDate;
+    const dailyDate = (dailyLatest as { trade_date: string }[] | null)?.[0]?.trade_date || latestDate;
     
     // 获取所有股票的涨跌幅数据用于统计
     const { data: allDailyData } = await supabaseStock
@@ -680,10 +724,18 @@ export async function fetchNorthFlow(days = 30) {
     }
     
     if (data && data.length > 0) {
-      console.log(`获取到 ${data.length} 条北向资金数据，最新日期: ${data[0].trade_date}`);
+      type MoneyflowHsgtRow = {
+        trade_date: string;
+        hgt: string;
+        sgt: string;
+        north_money: string;
+        south_money: string;
+      };
+      const typedData = data as MoneyflowHsgtRow[];
+      console.log(`获取到 ${typedData.length} 条北向资金数据，最新日期: ${typedData[0].trade_date}`);
       
       // 数据是按日期降序的，需要反转为升序用于图表显示
-      const sortedData = [...data].reverse();
+      const sortedData = [...typedData].reverse();
       
       // 转换为时间序列（金额单位：万元 -> 亿元）
       const timeSeries = sortedData.map(item => ({
@@ -692,7 +744,7 @@ export async function fetchNorthFlow(days = 30) {
       }));
       
       // 最新一天的数据
-      const latest = data[0];
+      const latest = typedData[0];
       const latestNorthMoney = parseFloat(latest.north_money) / 10000; // 亿元
       const latestHgt = parseFloat(latest.hgt) / 10000; // 沪股通，亿元
       const latestSgt = parseFloat(latest.sgt) / 10000; // 深股通，亿元
@@ -866,7 +918,15 @@ async function fetchFromSource(
       return [];
     }
 
-    return data.map((item) => {
+    type NewsRow = {
+      id: string | number;
+      title: string;
+      content: string;
+      display_time: number;
+      images: string | null;
+    };
+    const typedData = data as NewsRow[];
+    return typedData.map((item) => {
       const { time, date } = formatNewsTime(item.display_time);
       return {
         id: `${source.key}_${item.id}`,
@@ -1088,7 +1148,7 @@ export async function fetchStockListWithQuotes(params: {
       .order('trade_date', { ascending: false })
       .limit(1);
     
-    const latestDate = latestData?.[0]?.trade_date;
+    const latestDate = (latestData as { trade_date: string }[] | null)?.[0]?.trade_date;
     if (!latestDate) {
       console.warn('未找到最新交易日期');
       return { data: [], total: 0 };
@@ -1554,9 +1614,48 @@ export async function fetchStockFullDetail(tsCode: string) {
         .limit(1)
     ]);
     
-    const basic = basicResult.data;
-    const daily = dailyResult.data?.[0];
-    const dailyBasic = dailyBasicResult.data?.[0];
+    const basic = basicResult.data as {
+      ts_code: string;
+      symbol: string;
+      name: string;
+      area: string;
+      industry: string;
+      market: string;
+      list_date: string;
+    } | null;
+    
+    type DailyRow = {
+      trade_date: string;
+      open: number;
+      high: number;
+      low: number;
+      close: number;
+      pre_close: number;
+      change: number;
+      pct_chg: number;
+      vol: number;
+      amount: number;
+    };
+    const daily = (dailyResult.data as DailyRow[] | null)?.[0];
+    
+    type DailyBasicRow = {
+      turnover_rate: number;
+      turnover_rate_f: number;
+      volume_ratio: number;
+      pe: number;
+      pe_ttm: number;
+      pb: number;
+      ps: number;
+      ps_ttm: number;
+      dv_ratio: number;
+      dv_ttm: number;
+      total_share: number;
+      float_share: number;
+      free_share: number;
+      total_mv: number;
+      circ_mv: number;
+    };
+    const dailyBasic = (dailyBasicResult.data as DailyBasicRow[] | null)?.[0];
     
     if (!basic) {
       console.warn('未找到股票基本信息:', tsCode);

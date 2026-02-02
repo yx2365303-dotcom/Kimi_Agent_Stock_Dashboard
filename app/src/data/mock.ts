@@ -2,11 +2,11 @@ import type { IndexData, StockBasic, SectorData, LimitUpData, NewsItem, MarketSe
 
 // 大盘指数数据
 export const mockIndices: IndexData[] = [
-  { code: '000001.SH', name: '上证指数', current: 2950.50, change: 15.30, pct_change: 0.52, volume: 285000000, amount: 32500000000, high: 2960.80, low: 2935.20, pre_close: 2935.20 },
-  { code: '399001.SZ', name: '深证成指', current: 9450.30, change: 79.50, pct_change: 0.85, volume: 365000000, amount: 42500000000, high: 9480.60, low: 9370.80, pre_close: 9370.80 },
-  { code: '399006.SZ', name: '创业板指', current: 1850.20, change: 21.90, pct_change: 1.20, volume: 125000000, amount: 18500000000, high: 1860.50, low: 1828.30, pre_close: 1828.30 },
-  { code: '000688.SH', name: '科创50', current: 850.60, change: 2.95, pct_change: 0.35, volume: 25000000, amount: 8500000000, high: 855.30, low: 847.65, pre_close: 847.65 },
-  { code: '899050.BJ', name: '北证50', current: 750.80, change: 1.10, pct_change: 0.15, volume: 8000000, amount: 1200000000, high: 755.40, low: 749.70, pre_close: 749.70 },
+  { code: '000001.SH', name: '上证指数', current: 2950.50, change: 15.30, pct_change: 0.52, volume: 285000000, amount: 32500000000, high: 2960.80, low: 2935.20, open: 2940.00, pre_close: 2935.20 },
+  { code: '399001.SZ', name: '深证成指', current: 9450.30, change: 79.50, pct_change: 0.85, volume: 365000000, amount: 42500000000, high: 9480.60, low: 9370.80, open: 9380.00, pre_close: 9370.80 },
+  { code: '399006.SZ', name: '创业板指', current: 1850.20, change: 21.90, pct_change: 1.20, volume: 125000000, amount: 18500000000, high: 1860.50, low: 1828.30, open: 1830.00, pre_close: 1828.30 },
+  { code: '000688.SH', name: '科创50', current: 850.60, change: 2.95, pct_change: 0.35, volume: 25000000, amount: 8500000000, high: 855.30, low: 847.65, open: 848.00, pre_close: 847.65 },
+  { code: '899050.BJ', name: '北证50', current: 750.80, change: 1.10, pct_change: 0.15, volume: 8000000, amount: 1200000000, high: 755.40, low: 749.70, open: 750.00, pre_close: 749.70 },
 ];
 
 // 涨跌分布
