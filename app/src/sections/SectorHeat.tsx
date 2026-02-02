@@ -100,47 +100,45 @@ export function SectorHeat() {
                 <TrendingUp className="w-5 h-5 text-red-600" />
                 <h3 className="text-lg font-semibold text-slate-900">涨幅榜</h3>
               </div>
-              <ScrollArea className="h-80">
-                <div className="space-y-1">
-                  {mockSectors
-                    .filter(s => s.pct_change > 0)
-                    .sort((a, b) => b.pct_change - a.pct_change)
-                    .map((sector, index) => (
-                      <div
-                        key={sector.ts_code}
-                        className="flex items-center justify-between p-3 rounded-lg bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer"
-                      >
-                        <div className="flex items-center gap-3">
-                          <span className={cn(
-                            'w-6 h-6 flex items-center justify-center text-xs font-bold rounded',
-                            index < 3 ? 'bg-red-100 text-red-700' : 'text-slate-600'
-                          )}>
-                            {index + 1}
-                          </span>
-                          <span className="font-medium text-slate-900">{sector.name}</span>
-                          {sector.heat_score >= 80 && (
-                            <Flame className="w-4 h-4 text-red-600" />
-                          )}
-                        </div>
-                        <div className="flex items-center gap-4">
-                          <div className="text-right">
-                            <div className="text-[#ff4d4f] font-mono font-medium">
-                              +{sector.pct_change.toFixed(2)}%
-                            </div>
-                            <div className="text-xs text-slate-600">
-                              {sector.limit_up_count}只涨停
-                            </div>
+              <div className="space-y-1">
+                {mockSectors
+                  .filter(s => s.pct_change > 0)
+                  .sort((a, b) => b.pct_change - a.pct_change)
+                  .map((sector, index) => (
+                    <div
+                      key={sector.ts_code}
+                      className="flex items-center justify-between p-3 rounded-lg bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer"
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className={cn(
+                          'w-6 h-6 flex items-center justify-center text-xs font-bold rounded',
+                          index < 3 ? 'bg-red-100 text-red-700' : 'text-slate-600'
+                        )}>
+                          {index + 1}
+                        </span>
+                        <span className="font-medium text-slate-900">{sector.name}</span>
+                        {sector.heat_score >= 80 && (
+                          <Flame className="w-4 h-4 text-red-600" />
+                        )}
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <div className="text-right">
+                          <div className="text-[#ff4d4f] font-mono font-medium">
+                            +{sector.pct_change.toFixed(2)}%
                           </div>
-                          <div className="text-right min-w-20">
-                            <div className="text-sm text-[#ff7875]">
-                              +{sector.net_inflow.toFixed(1)}亿
-                            </div>
+                          <div className="text-xs text-slate-600">
+                            {sector.limit_up_count}只涨停
+                          </div>
+                        </div>
+                        <div className="text-right min-w-20">
+                          <div className="text-sm text-[#ff7875]">
+                            +{sector.net_inflow.toFixed(1)}亿
                           </div>
                         </div>
                       </div>
-                    ))}
-                </div>
-              </ScrollArea>
+                    </div>
+                  ))}
+              </div>
             </Card>
 
             {/* 跌幅榜 */}
@@ -149,44 +147,42 @@ export function SectorHeat() {
                 <TrendingDown className="w-5 h-5 text-green-600" />
                 <h3 className="text-lg font-semibold text-slate-900">跌幅榜</h3>
               </div>
-              <ScrollArea className="h-80">
-                <div className="space-y-1">
-                  {mockSectors
-                    .filter(s => s.pct_change < 0)
-                    .sort((a, b) => a.pct_change - b.pct_change)
-                    .map((sector, index) => (
-                      <div
-                        key={sector.ts_code}
-                        className="flex items-center justify-between p-3 rounded-lg bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer"
-                      >
-                        <div className="flex items-center gap-3">
-                          <span className={cn(
-                            'w-6 h-6 flex items-center justify-center text-xs font-bold rounded',
-                            index < 3 ? 'bg-green-100 text-green-700' : 'text-slate-600'
-                          )}>
-                            {index + 1}
-                          </span>
-                          <span className="font-medium text-slate-900">{sector.name}</span>
-                        </div>
-                        <div className="flex items-center gap-4">
-                          <div className="text-right">
-                            <div className="text-green-600 font-mono font-medium">
-                              {sector.pct_change.toFixed(2)}%
-                            </div>
-                            <div className="text-xs text-slate-600">
-                              {sector.down_count}只下跌
-                            </div>
+              <div className="space-y-1">
+                {mockSectors
+                  .filter(s => s.pct_change < 0)
+                  .sort((a, b) => a.pct_change - b.pct_change)
+                  .map((sector, index) => (
+                    <div
+                      key={sector.ts_code}
+                      className="flex items-center justify-between p-3 rounded-lg bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer"
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className={cn(
+                          'w-6 h-6 flex items-center justify-center text-xs font-bold rounded',
+                          index < 3 ? 'bg-green-100 text-green-700' : 'text-slate-600'
+                        )}>
+                          {index + 1}
+                        </span>
+                        <span className="font-medium text-slate-900">{sector.name}</span>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <div className="text-right">
+                          <div className="text-green-600 font-mono font-medium">
+                            {sector.pct_change.toFixed(2)}%
                           </div>
-                          <div className="text-right min-w-20">
-                            <div className="text-sm text-green-500">
-                              {sector.net_inflow.toFixed(1)}亿
-                            </div>
+                          <div className="text-xs text-slate-600">
+                            {sector.down_count}只下跌
+                          </div>
+                        </div>
+                        <div className="text-right min-w-20">
+                          <div className="text-sm text-green-500">
+                            {sector.net_inflow.toFixed(1)}亿
                           </div>
                         </div>
                       </div>
-                    ))}
-                </div>
-              </ScrollArea>
+                    </div>
+                  ))}
+              </div>
             </Card>
           </div>
         </TabsContent>
