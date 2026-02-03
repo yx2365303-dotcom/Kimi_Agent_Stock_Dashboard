@@ -95,7 +95,7 @@ export function NewsCenter() {
   const [activeTab, setActiveTab] = useState('flash');
   const [flashNews, setFlashNews] = useState<FlashNewsItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  // refreshing state removed - was declared but never read
   const [selectedSource, setSelectedSource] = useState<string>('all');
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
@@ -249,9 +249,7 @@ export function NewsCenter() {
 
   // 加载实时新闻
   const loadNews = useCallback(async (isRefresh = false, limit = 50) => {
-    if (isRefresh) {
-      setRefreshing(true);
-    } else if (!isRefresh && flashNews.length === 0) {
+    if (!isRefresh && flashNews.length === 0) {
       setLoading(true);
     }
 
@@ -270,7 +268,6 @@ export function NewsCenter() {
       console.error('加载新闻失败:', error);
     } finally {
       setLoading(false);
-      setRefreshing(false);
     }
   }, [selectedSource, flashNews.length]);
 
