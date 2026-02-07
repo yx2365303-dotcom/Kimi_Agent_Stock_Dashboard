@@ -1,22 +1,23 @@
 import { useState, useEffect } from 'react';
 import { KLineChart } from '@/components/chart/KLineChart';
+import { TimeSeriesChart } from '@/components/chart/TimeSeriesChart';
 import { StockListTable } from '@/components/stock/StockListTable';
 import { cn, formatNumber, getChangeColor } from '@/lib/utils';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Skeleton } from '@/components/ui/skeleton';
-import { 
-  Star, 
-  Bell, 
-  Share2, 
-  TrendingUp, 
+import {
+  Star,
+  Bell,
+  Share2,
+  TrendingUp,
   BarChart3,
   FileText,
   Newspaper,
   ArrowLeft
 } from 'lucide-react';
-import { fetchStockFullDetail, fetchKLineData, fetchStockMoneyFlow } from '@/services/stockService';
+import { fetchStockFullDetail, fetchKLineData, fetchStockMoneyFlow, fetchTimeSeriesData } from '@/services/stockService';
 
 // 格式化大数值（万元转为亿元等）
 function formatLargeNumber(value: number, unit: 'wan' | 'qianwan' = 'wan'): string {
@@ -112,17 +113,26 @@ interface KLineItem {
   volume: number;
 }
 
+interface TimeSeriesItem {
+  time: string;
+  price: number;
+  volume: number;
+  avg_price: number;
+}
+
 // 股票详情视图组件
-function StockDetailView({ 
-  stockCode, 
-  onBack 
-}: { 
-  stockCode: string; 
+function StockDetailView({
+  stockCode,
+  onBack
+}: {
+  stockCode: string;
   onBack: () => void;
 }) {
   const [stockData, setStockData] = useState<StockDetailData | null>(null);
   const [kLineData, setKLineData] = useState<KLineItem[]>([]);
+  const [timeSeriesData, setTimeSeriesData] = useState<TimeSeriesItem[]>([]);
   const [moneyFlowData, setMoneyFlowData] = useState<MoneyFlowItem[]>([]);
+  const [chartType, setChartType] = useState<'timeseries' | 'kline'>('timeseries');
   const [loading, setLoading] = useState(true);
   const [isFavorited, setIsFavorited] = useState(false);
 
@@ -131,12 +141,13 @@ function StockDetailView({
     async function loadData() {
       setLoading(true);
       try {
-        const [detail, kline, moneyFlow] = await Promise.all([
+        const [detail, kline, moneyFlow, timeSeries] = await Promise.all([
           fetchStockFullDetail(stockCode),
           fetchKLineData(stockCode, 60),
-          fetchStockMoneyFlow(stockCode, 5)
+          fetchStockMoneyFlow(stockCode, 5),
+          fetchTimeSeriesData(stockCode)
         ]);
-        
+
         if (detail) {
           setStockData(detail as StockDetailData);
         }
@@ -146,13 +157,16 @@ function StockDetailView({
         if (moneyFlow) {
           setMoneyFlowData(moneyFlow);
         }
+        if (timeSeries) {
+          setTimeSeriesData(timeSeries);
+        }
       } catch (error) {
         console.error('加载股票数据失败:', error);
       } finally {
         setLoading(false);
       }
     }
-    
+
     loadData();
   }, [stockCode]);
 
@@ -214,9 +228,9 @@ function StockDetailView({
               </div>
             </div>
             <div className="flex items-center gap-1">
-              <Button 
-                variant="ghost" 
-                size="icon" 
+              <Button
+                variant="ghost"
+                size="icon"
                 className="text-slate-400 hover:text-yellow-400"
                 onClick={() => setIsFavorited(!isFavorited)}
               >
@@ -230,7 +244,7 @@ function StockDetailView({
               </Button>
             </div>
           </div>
-          
+
           <div className="flex items-center gap-4">
             <div className={cn('text-3xl font-bold font-mono', getChangeColor(change))}>
               {formatNumber(currentPrice)}
@@ -287,14 +301,43 @@ function StockDetailView({
 
       {/* 主要内容区 */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* K线图 */}
+        {/* 图表区域 */}
         <Card className="p-4 lg:col-span-2">
-          {kLineData.length > 0 ? (
-            <KLineChart data={kLineData} className="h-96" />
+          {/* 图表类型切换 */}
+          <div className="flex items-center gap-2 mb-4">
+            <Button
+              variant={chartType === 'timeseries' ? 'default' : 'outline'}
+              size="sm"
+              className="h-7 px-3 text-xs"
+              onClick={() => setChartType('timeseries')}
+            >
+              分时
+            </Button>
+            <Button
+              variant={chartType === 'kline' ? 'default' : 'outline'}
+              size="sm"
+              className="h-7 px-3 text-xs"
+              onClick={() => setChartType('kline')}
+            >
+              日K
+            </Button>
+          </div>
+
+          {/* 图表内容 */}
+          {chartType === 'timeseries' ? (
+            <TimeSeriesChart
+              data={timeSeriesData}
+              preClose={stockData.pre_close || 0}
+              className="h-96"
+            />
           ) : (
-            <div className="h-96 flex items-center justify-center text-slate-500">
-              暂无K线数据
-            </div>
+            kLineData.length > 0 ? (
+              <KLineChart data={kLineData} className="h-96" />
+            ) : (
+              <div className="h-96 flex items-center justify-center text-slate-500">
+                暂无K线数据
+              </div>
+            )
           )}
         </Card>
 
@@ -414,7 +457,7 @@ function StockDetailView({
             公司信息
           </TabsTrigger>
         </TabsList>
-        
+
         <TabsContent value="fundamental" className="mt-4">
           <Card className="p-4">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -453,7 +496,7 @@ function StockDetailView({
             </div>
           </Card>
         </TabsContent>
-        
+
         <TabsContent value="financial" className="mt-4">
           <Card className="p-4">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -492,7 +535,7 @@ function StockDetailView({
             </div>
           </Card>
         </TabsContent>
-        
+
         <TabsContent value="capital" className="mt-4">
           <Card className="p-4">
             <h3 className="text-lg font-semibold text-slate-900 mb-4">近5日资金流向</h3>
@@ -555,7 +598,7 @@ function StockDetailView({
             )}
           </Card>
         </TabsContent>
-        
+
         <TabsContent value="news" className="mt-4">
           <Card className="p-4">
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
@@ -598,9 +641,9 @@ export function StockDetail() {
   // 如果选中了股票，显示详情页
   if (selectedStock) {
     return (
-      <StockDetailView 
-        stockCode={selectedStock} 
-        onBack={() => setSelectedStock(null)} 
+      <StockDetailView
+        stockCode={selectedStock}
+        onBack={() => setSelectedStock(null)}
       />
     );
   }

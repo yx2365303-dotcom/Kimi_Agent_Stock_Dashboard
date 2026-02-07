@@ -1999,17 +1999,80 @@ export async function fetchStockDaily(tsCode: string, days = 60): Promise<DailyD
 }
 
 /**
+ * 获取单只股票的实时行情数据
+ * 从 realtime_quote_cache 表获取最新一条数据
+ */
+export async function fetchRealtimeQuote(tsCode: string) {
+  try {
+    const { data, error } = await supabaseStock
+      .from('realtime_quote_cache')
+      .select('ts_code, name, date, time, open, high, low, price, volume, amount, pre_close, change_pct, change_amount')
+      .eq('ts_code', tsCode)
+      .order('date', { ascending: false })
+      .order('time', { ascending: false })
+      .limit(1);
+
+    if (error) {
+      console.warn('获取实时行情失败:', error);
+      return null;
+    }
+
+    if (data && data.length > 0) {
+      const quote = data[0] as {
+        ts_code: string;
+        name: string;
+        date: string;
+        time: string;
+        open: number;
+        high: number;
+        low: number;
+        price: number;
+        volume: number;
+        amount: number;
+        pre_close: number;
+        change_pct: number;
+        change_amount: number;
+      };
+      console.log(`获取到 ${quote.name || quote.ts_code} 实时行情: ${quote.price} (${quote.date} ${quote.time})`);
+      return quote;
+    }
+
+    return null;
+  } catch (error) {
+    console.error('获取实时行情失败:', error);
+    return null;
+  }
+}
+
+/**
+ * 格式化日期：YYYYMMDD -> YYYY-MM-DD 或保持原样
+ */
+function formatKLineDate(dateStr: string): string {
+  if (dateStr.length === 8 && !dateStr.includes('-')) {
+    // YYYYMMDD -> YYYY-MM-DD
+    return `${dateStr.slice(0, 4)}-${dateStr.slice(4, 6)}-${dateStr.slice(6, 8)}`;
+  }
+  return dateStr;
+}
+
+/**
  * 获取K线数据（用于图表）
+ * 融合历史数据和实时行情数据
  */
 export async function fetchKLineData(tsCode: string, days = 60) {
   try {
-    // 直接从 daily 表获取完整的 OHLC 数据
-    const { data, error } = await supabaseStock
-      .from('daily')
-      .select('trade_date, open, high, low, close, vol, amount')
-      .eq('ts_code', tsCode)
-      .order('trade_date', { ascending: false })
-      .limit(days);
+    // 1. 并行获取历史K线数据和实时行情
+    const [historyResult, realtimeQuote] = await Promise.all([
+      supabaseStock
+        .from('daily')
+        .select('trade_date, open, high, low, close, vol, amount')
+        .eq('ts_code', tsCode)
+        .order('trade_date', { ascending: false })
+        .limit(days),
+      fetchRealtimeQuote(tsCode)
+    ]);
+
+    const { data, error } = historyResult;
 
     if (error) {
       console.warn('获取K线数据失败:', error);
@@ -2017,8 +2080,10 @@ export async function fetchKLineData(tsCode: string, days = 60) {
     }
 
     if (data && data.length > 0) {
-      console.log(`获取到 ${data.length} 条K线数据`);
-      return data.reverse().map((item: {
+      console.log(`获取到 ${data.length} 条历史K线数据`);
+
+      // 转换历史数据格式
+      const klineData = data.reverse().map((item: {
         trade_date: string;
         open: number;
         high: number;
@@ -2034,6 +2099,35 @@ export async function fetchKLineData(tsCode: string, days = 60) {
         close: item.close,
         volume: item.vol
       }));
+
+      // 2. 融合实时数据
+      if (realtimeQuote) {
+        const realtimeDate = formatKLineDate(realtimeQuote.date);
+        const lastHistoryDate = klineData.length > 0 ? klineData[klineData.length - 1].date : '';
+
+        // 构建实时K线条目
+        const realtimeBar = {
+          date: realtimeDate,
+          open: realtimeQuote.open,
+          high: realtimeQuote.high,
+          low: realtimeQuote.low,
+          close: realtimeQuote.price, // 现价作为收盘价
+          volume: realtimeQuote.volume
+        };
+
+        if (realtimeDate > lastHistoryDate) {
+          // 实时数据日期 > 历史最新日期：追加为新K线
+          console.log(`追加实时K线: ${realtimeDate}`);
+          klineData.push(realtimeBar);
+        } else if (realtimeDate === lastHistoryDate) {
+          // 实时数据日期 = 历史最新日期：更新最新K线
+          console.log(`更新最新K线: ${realtimeDate}`);
+          klineData[klineData.length - 1] = realtimeBar;
+        }
+        // 如果实时数据日期 < 历史最新日期，则忽略（可能是缓存过期数据）
+      }
+
+      return klineData;
     }
 
     // 降级到模拟数据
@@ -2043,6 +2137,7 @@ export async function fetchKLineData(tsCode: string, days = 60) {
     return generateKLineData(days);
   }
 }
+
 
 /**
  * 获取股票完整详情（基本信息 + 行情数据 + 估值指标）
@@ -2283,10 +2378,64 @@ export async function fetchStockMoneyFlow(tsCode: string, days = 5) {
 
 /**
  * 获取分时数据
+ * 从 realtime_quote_cache 表获取当日分时数据
  */
-export async function fetchTimeSeriesData(_tsCode: string) {
-  // 分时数据通常需要实时接口，这里先返回模拟数据
-  return generateTimeSeriesData();
+export async function fetchTimeSeriesData(tsCode: string) {
+  try {
+    // 获取当日日期 (YYYYMMDD 格式)
+    const today = new Date();
+    const todayStr = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
+
+    const { data, error } = await supabaseStock
+      .from('realtime_quote_cache')
+      .select('time, price, volume, amount, pre_close')
+      .eq('ts_code', tsCode)
+      .eq('date', todayStr)
+      .order('time', { ascending: true });
+
+    if (error) {
+      console.warn('获取分时数据失败:', error);
+      return generateTimeSeriesData();
+    }
+
+    if (data && data.length > 0) {
+      console.log(`获取到 ${data.length} 条分时数据`);
+
+      // 计算累计成交额和成交量，用于均价计算
+      let cumulativeAmount = 0;
+      let cumulativeVolume = 0;
+
+      return data.map((item: {
+        time: string;
+        price: number;
+        volume: number;
+        amount: number;
+        pre_close: number;
+      }) => {
+        cumulativeAmount += item.amount || 0;
+        cumulativeVolume += item.volume || 0;
+
+        // 分时均价 = 累计成交额 / 累计成交量
+        const avg_price = cumulativeVolume > 0
+          ? cumulativeAmount / cumulativeVolume
+          : item.price;
+
+        return {
+          time: item.time.substring(0, 5), // HH:MM:SS -> HH:MM
+          price: item.price,
+          volume: item.volume,
+          avg_price: Number(avg_price.toFixed(2))
+        };
+      });
+    }
+
+    // 降级到模拟数据
+    console.log('无分时数据，使用模拟数据');
+    return generateTimeSeriesData();
+  } catch (error) {
+    console.error('获取分时数据失败:', error);
+    return generateTimeSeriesData();
+  }
 }
 
 /**
@@ -2735,6 +2884,7 @@ export const stockService = {
   fetchStockFullDetail,
   fetchStockDaily,
   fetchKLineData,
+  fetchRealtimeQuote,
   fetchTimeSeriesData,
   fetchMoneyFlow,
   fetchStockMoneyFlow,
