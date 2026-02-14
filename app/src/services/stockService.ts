@@ -19,6 +19,55 @@ import {
 // 是否使用模拟数据（当Supabase未配置或出错时自动降级）
 const USE_MOCK_FALLBACK = true;
 
+const RPC_DISABLE_KEY_PREFIX = 'alphapulse:rpc:disable:';
+const RPC_DISABLE_MS = 30 * 60 * 1000;
+
+function getRpcDisableKey(rpcName: string): string {
+  return `${RPC_DISABLE_KEY_PREFIX}${rpcName}`;
+}
+
+function getRpcDisabledUntil(rpcName: string): number {
+  if (typeof window === 'undefined') return 0;
+
+  const raw = window.localStorage.getItem(getRpcDisableKey(rpcName));
+  if (!raw) return 0;
+  const until = Number(raw);
+  return Number.isFinite(until) ? until : 0;
+}
+
+function isRpcTemporarilyDisabled(rpcName: string): boolean {
+  return Date.now() < getRpcDisabledUntil(rpcName);
+}
+
+function disableRpcTemporarily(rpcName: string): void {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(getRpcDisableKey(rpcName), String(Date.now() + RPC_DISABLE_MS));
+}
+
+function clearRpcDisableFlag(rpcName: string): void {
+  if (typeof window === 'undefined') return;
+  window.localStorage.removeItem(getRpcDisableKey(rpcName));
+}
+
+function shouldDisableRpcAfterError(error: unknown): boolean {
+  const text = (
+    typeof error === 'string'
+      ? error
+      : JSON.stringify(error)
+  ).toLowerCase();
+
+  return (
+    text.includes('pgrst202') ||
+    text.includes('42883') ||
+    text.includes('42p01') ||
+    text.includes('42501') ||
+    text.includes('could not find the function') ||
+    text.includes('function') && text.includes('does not exist') ||
+    text.includes('relation') && text.includes('does not exist') ||
+    text.includes('permission denied')
+  );
+}
+
 // ===========================================
 // 实际数据库表结构（基于检查结果）
 // ===========================================
@@ -2926,30 +2975,43 @@ export async function fetchMarketOverviewBundle(forceRefresh = false): Promise<M
     'market:overview:bundle',
     'fetchMarketOverviewBundle',
     async (signal) => {
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const rpcClient = supabaseStock as any;
-        let rpcQuery = rpcClient.rpc('get_market_overview_bundle');
-        if (typeof rpcQuery?.abortSignal === 'function') {
-          rpcQuery = rpcQuery.abortSignal(signal);
-        }
+      const rpcName = 'get_market_overview_bundle';
+      const canTryRpc = forceRefresh || !isRpcTemporarilyDisabled(rpcName);
 
-        const { data: rpcData, error: rpcError } = await rpcQuery;
-        if (!rpcError && rpcData) {
-          const payload = typeof rpcData === 'string' ? JSON.parse(rpcData) : rpcData;
-          return {
-            indices: payload.indices || [],
-            sectors: payload.sectors || [],
-            limitUpList: payload.limitUpList || [],
-            upDownDistribution: payload.upDownDistribution || null,
-            enhancedSentiment: payload.enhancedSentiment || null,
-            northFlow: payload.northFlow || null,
-            hsgtTop10: payload.hsgtTop10 || [],
-            updateTime: payload.updateTime || getFormattedUpdateTime(),
-          } as MarketOverviewBundle;
+      if (canTryRpc) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const rpcClient = supabaseStock as any;
+          let rpcQuery = rpcClient.rpc(rpcName);
+          if (typeof rpcQuery?.abortSignal === 'function') {
+            rpcQuery = rpcQuery.abortSignal(signal);
+          }
+
+          const { data: rpcData, error: rpcError } = await rpcQuery;
+          if (!rpcError && rpcData) {
+            clearRpcDisableFlag(rpcName);
+            const payload = typeof rpcData === 'string' ? JSON.parse(rpcData) : rpcData;
+            return {
+              indices: payload.indices || [],
+              sectors: payload.sectors || [],
+              limitUpList: payload.limitUpList || [],
+              upDownDistribution: payload.upDownDistribution || null,
+              enhancedSentiment: payload.enhancedSentiment || null,
+              northFlow: payload.northFlow || null,
+              hsgtTop10: payload.hsgtTop10 || [],
+              updateTime: payload.updateTime || getFormattedUpdateTime(),
+            } as MarketOverviewBundle;
+          }
+
+          if (rpcError && shouldDisableRpcAfterError(rpcError)) {
+            disableRpcTemporarily(rpcName);
+          }
+        } catch (rpcErr) {
+          if (shouldDisableRpcAfterError(rpcErr)) {
+            disableRpcTemporarily(rpcName);
+          }
+          console.warn('RPC get_market_overview_bundle 调用失败，降级前端聚合:', rpcErr);
         }
-      } catch (rpcErr) {
-        console.warn('RPC get_market_overview_bundle 调用失败，降级前端聚合:', rpcErr);
       }
 
       const [indices, sectors, limitUpList, upDownDistribution, northFlow, hsgtTop10] = await Promise.all([
