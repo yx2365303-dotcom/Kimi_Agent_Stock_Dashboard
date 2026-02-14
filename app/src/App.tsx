@@ -1,13 +1,35 @@
-import { useState } from 'react';
+import { Suspense, lazy, useState } from 'react';
 import { Navigation } from '@/components/Navigation';
-import { MarketOverview } from '@/sections/MarketOverview';
-import { StockDetail } from '@/sections/StockDetail';
-import { SectorHeat } from '@/sections/SectorHeat';
-import { StockScreener } from '@/sections/StockScreener';
-import { AIAnalysis } from '@/sections/AIAnalysis';
-import { NewsCenter } from '@/sections/NewsCenter';
-import { DragonTigerPage } from '@/sections/DragonTigerPage';
 import { Toaster } from '@/components/ui/sonner';
+import { Skeleton } from '@/components/ui/skeleton';
+
+const MarketOverview = lazy(() => import('@/sections/MarketOverview').then((m) => ({ default: m.MarketOverview })));
+const StockDetail = lazy(() => import('@/sections/StockDetail').then((m) => ({ default: m.StockDetail })));
+const SectorHeat = lazy(() => import('@/sections/SectorHeat').then((m) => ({ default: m.SectorHeat })));
+const StockScreener = lazy(() => import('@/sections/StockScreener').then((m) => ({ default: m.StockScreener })));
+const AIAnalysis = lazy(() => import('@/sections/AIAnalysis').then((m) => ({ default: m.AIAnalysis })));
+const NewsCenter = lazy(() => import('@/sections/NewsCenter').then((m) => ({ default: m.NewsCenter })));
+const DragonTigerPage = lazy(() => import('@/sections/DragonTigerPage').then((m) => ({ default: m.DragonTigerPage })));
+
+function SectionFallback() {
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <Skeleton className="h-7 w-32" />
+        <Skeleton className="h-8 w-28" />
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <Skeleton key={i} className="h-32" />
+        ))}
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Skeleton className="h-80" />
+        <Skeleton className="h-80" />
+      </div>
+    </div>
+  );
+}
 
 function App() {
   const [activeTab, setActiveTab] = useState('market');
@@ -37,7 +59,9 @@ function App() {
     <div className="min-h-screen bg-white">
       <Navigation activeTab={activeTab} onTabChange={setActiveTab} />
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {renderContent()}
+        <Suspense fallback={<SectionFallback />}>
+          {renderContent()}
+        </Suspense>
       </main>
       <Toaster />
     </div>

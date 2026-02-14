@@ -12,4 +12,21 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return;
+
+          if (id.includes('recharts') || id.includes('echarts') || id.includes('lightweight-charts')) {
+            return 'vendor-charts';
+          }
+
+          if (id.includes('@supabase')) {
+            return 'vendor-supabase';
+          }
+        },
+      },
+    },
+  },
 });

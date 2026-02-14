@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import useSWR from 'swr';
 import { cn } from '@/lib/utils';
 import { Card } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -24,7 +25,7 @@ import {
   Image as ImageIcon
 } from 'lucide-react';
 import { fetchRealTimeNews, NEWS_SOURCES } from '@/services/stockService';
-import { subscribeToAllNewsTables, getActiveSubscriptionCount } from '@/lib/supabase';
+import { FEATURED_NEWS_TABLES, subscribeToNewsTables, getActiveSubscriptionCount } from '@/lib/supabase';
 
 // 实时快讯类型
 interface FlashNewsItem {
@@ -93,10 +94,43 @@ const sourceColorMap: Record<string, string> = {
   yuncaijing: 'bg-cyan-100 text-cyan-700 border-cyan-200',
 };
 
+const TABLE_TO_SOURCE_KEY: Record<string, string> = {
+  // 大V渠道
+  'snowball_influencer_tb': 'snowball_influencer',
+  'weibo_influencer_tb': 'weibo_influencer',
+
+  // 主流平台
+  'clscntelegraph_tb': 'cls',
+  'eastmoney724_tb': 'eastmoney',
+  'jin10data724_tb': 'jin10',
+  'gelonghui724_tb': 'gelonghui',
+  'sina724_tb': 'sina',
+  'jqka724_tb': 'jqka',
+  'jrj724_tb': 'jrj',
+  'futunn724_tb': 'futunn',
+  'ifeng724_tb': 'ifeng',
+  'jin10qihuo724_tb': 'jin10qihuo',
+  'chinastarmarkettelegraph724_tb': 'chinastar',
+
+  // 其他平台
+  'snowball724_tb': 'snowball',
+  'wallstreetcn_tb': 'wallstreetcn',
+  'xuangutong724_tb': 'xuangutong',
+  'yicai724_tb': 'yicai',
+  'yuncaijing724_tb': 'yuncaijing',
+};
+
+const SOURCE_TO_TABLE_MAP: Record<string, string> = Object.entries(TABLE_TO_SOURCE_KEY).reduce(
+  (acc, [tableName, sourceKey]) => {
+    acc[sourceKey] = tableName;
+    return acc;
+  },
+  {} as Record<string, string>
+);
+
 export function NewsCenter() {
   const [activeTab, setActiveTab] = useState('flash');
   const [flashNews, setFlashNews] = useState<FlashNewsItem[]>([]);
-  const [loading, setLoading] = useState(true);
   // refreshing state removed - was declared but never read
   const [selectedSource, setSelectedSource] = useState<string>('all');
   const [loadingMore, setLoadingMore] = useState(false);
@@ -133,37 +167,33 @@ export function NewsCenter() {
 
   // Realtime 相关状态
   const [realtimeEnabled, setRealtimeEnabled] = useState(true);
-  const [realtimeConnected, setRealtimeConnected] = useState(false);
   const [newNewsCount, setNewNewsCount] = useState(0);
   const [realtimeNews, setRealtimeNews] = useState<FlashNewsItem[]>([]);
   const unsubscribeRef = useRef<(() => void) | null>(null);
+  const realtimeConnected = realtimeEnabled && getActiveSubscriptionCount() > 0;
+  const dateFilter = formatDateForApi(selectedDate);
+  const selectedSources = selectedSource === 'all' ? undefined : [selectedSource];
 
-  // 表名到 sourceKey 的映射
-  const tableToSourceKey: Record<string, string> = {
-    // 大V渠道
-    'snowball_influencer_tb': 'snowball_influencer',
-    'weibo_influencer_tb': 'weibo_influencer',
-
-    // 主流平台
-    'clscntelegraph_tb': 'cls',
-    'eastmoney724_tb': 'eastmoney',
-    'jin10data724_tb': 'jin10',
-    'gelonghui724_tb': 'gelonghui',
-    'sina724_tb': 'sina',
-    'jqka724_tb': 'jqka',
-    'jrj724_tb': 'jrj',
-    'futunn724_tb': 'futunn',
-    'ifeng724_tb': 'ifeng',
-    'jin10qihuo724_tb': 'jin10qihuo',
-    'chinastarmarkettelegraph724_tb': 'chinastar',
-
-    // 其他平台
-    'snowball724_tb': 'snowball',
-    'wallstreetcn_tb': 'wallstreetcn',
-    'xuangutong724_tb': 'xuangutong',
-    'yicai724_tb': 'yicai',
-    'yuncaijing724_tb': 'yuncaijing',
-  };
+  const { isLoading, mutate } = useSWR(
+    ['news:realtime', selectedSource, dateFilter, currentLimit],
+    () => fetchRealTimeNews({
+      sources: selectedSources,
+      limit: selectedSource === 'all' ? 20 : 30,
+      totalLimit: currentLimit,
+      dateFilter
+    }),
+    {
+      dedupingInterval: 5_000,
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+      refreshInterval: activeTab === 'flash' && !realtimeEnabled ? 30_000 : 0,
+      onSuccess: (news) => {
+        setFlashNews(news);
+        setHasMore(news.length >= currentLimit);
+        setLoadingMore(false);
+      }
+    }
+  );
 
   // 格式化时间戳
   const formatNewsTime = (timestamp: number) => {
@@ -198,15 +228,21 @@ export function NewsCenter() {
       if (unsubscribeRef.current) {
         unsubscribeRef.current();
         unsubscribeRef.current = null;
-        setRealtimeConnected(false);
       }
       return;
     }
 
-    // 订阅所有新闻表
-    const unsubscribe = subscribeToAllNewsTables((tableName, payload) => {
+    const targetTables = selectedSource === 'all'
+      ? FEATURED_NEWS_TABLES
+      : (SOURCE_TO_TABLE_MAP[selectedSource] ? [SOURCE_TO_TABLE_MAP[selectedSource]] : []);
+
+    if (targetTables.length === 0) {
+      return;
+    }
+
+    const unsubscribe = subscribeToNewsTables(targetTables, (tableName, payload) => {
       const newData = payload.new as Record<string, unknown>;
-      const sourceKey = tableToSourceKey[tableName] || 'unknown';
+      const sourceKey = TABLE_TO_SOURCE_KEY[tableName] || 'unknown';
       const sourceName = NEWS_SOURCES.find(s => s.key === sourceKey)?.name || tableName;
 
       const { time, date } = formatNewsTime(newData.display_time as number);
@@ -239,14 +275,12 @@ export function NewsCenter() {
     });
 
     unsubscribeRef.current = unsubscribe;
-    setRealtimeConnected(true);
-    console.log('[Realtime] 已启用实时订阅，订阅数:', getActiveSubscriptionCount());
+    console.log('[Realtime] 已启用实时订阅，订阅数:', getActiveSubscriptionCount(), '订阅表:', targetTables);
 
     return () => {
       if (unsubscribeRef.current) {
         unsubscribeRef.current();
         unsubscribeRef.current = null;
-        setRealtimeConnected(false);
       }
     };
   }, [realtimeEnabled, selectedSource]);
@@ -273,73 +307,14 @@ export function NewsCenter() {
     setNewNewsCount(0);
   }, [realtimeNews]);
 
-  // 加载实时新闻
-  const loadNews = useCallback(async (isRefresh = false, limit = 50) => {
-    if (!isRefresh && flashNews.length === 0) {
-      setLoading(true);
-    }
-
-    try {
-      const sources = selectedSource === 'all' ? undefined : [selectedSource];
-      const dateFilter = formatDateForApi(selectedDate);
-      const data = await fetchRealTimeNews({
-        sources,
-        limit: 30, // 每个源获取30条
-        totalLimit: limit,
-        dateFilter
-      });
-
-      setFlashNews(data);
-      setHasMore(data.length >= limit);
-      setCurrentLimit(limit);
-    } catch (error) {
-      console.error('加载新闻失败:', error);
-    } finally {
-      setLoading(false);
-    }
-  }, [selectedSource, selectedDate, flashNews.length]);
-
   // 加载更多
-  const loadMore = useCallback(async () => {
+  const loadMore = useCallback(() => {
     if (loadingMore || !hasMore) return;
-
     setLoadingMore(true);
-    try {
-      const newLimit = currentLimit + 50;
-      const sources = selectedSource === 'all' ? undefined : [selectedSource];
-      const dateFilter = formatDateForApi(selectedDate);
-      const data = await fetchRealTimeNews({
-        sources,
-        limit: 30,
-        totalLimit: newLimit,
-        dateFilter
-      });
+    setCurrentLimit(prev => prev + 50);
+  }, [loadingMore, hasMore]);
 
-      setFlashNews(data);
-      setHasMore(data.length >= newLimit);
-      setCurrentLimit(newLimit);
-    } catch (error) {
-      console.error('加载更多失败:', error);
-    } finally {
-      setLoadingMore(false);
-    }
-  }, [currentLimit, selectedSource, selectedDate, loadingMore, hasMore]);
-
-  // 初始加载和切换源或日期时重新加载
-  useEffect(() => {
-    loadNews(false, 50);
-  }, [selectedSource, selectedDate]);
-
-  // 自动刷新（每30秒）
-  useEffect(() => {
-    const timer = setInterval(() => {
-      if (activeTab === 'flash') {
-        loadNews(true, currentLimit);
-      }
-    }, 30000);
-
-    return () => clearInterval(timer);
-  }, [activeTab, currentLimit, loadNews]);
+  const loading = isLoading && flashNews.length === 0;
 
   const getImportanceColor = (importance: string) => {
     switch (importance) {
@@ -472,6 +447,7 @@ export function NewsCenter() {
                     onSelect={(date) => {
                       if (date) {
                         setSelectedDate(date);
+                        setCurrentLimit(50);
                         setDatePickerOpen(false);
                       }
                     }}
@@ -522,7 +498,10 @@ export function NewsCenter() {
                     ? 'bg-blue-600 text-white'
                     : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
                 )}
-                onClick={() => setSelectedSource('all')}
+                onClick={() => {
+                  setSelectedSource('all');
+                  setCurrentLimit(50);
+                }}
               >
                 全部
               </Badge>
@@ -535,7 +514,10 @@ export function NewsCenter() {
                       ? 'bg-blue-600 text-white'
                       : sourceColorMap[source.key] || 'bg-slate-200 text-slate-700 hover:bg-slate-300'
                   )}
-                  onClick={() => setSelectedSource(source.key)}
+                  onClick={() => {
+                    setSelectedSource(source.key);
+                    setCurrentLimit(50);
+                  }}
                 >
                   {source.name}
                 </Badge>
@@ -567,7 +549,7 @@ export function NewsCenter() {
                   <p>暂无新闻数据</p>
                   <Button
                     variant="link"
-                    onClick={() => loadNews(true, 50)}
+                    onClick={() => mutate()}
                     className="mt-2"
                   >
                     点击重试

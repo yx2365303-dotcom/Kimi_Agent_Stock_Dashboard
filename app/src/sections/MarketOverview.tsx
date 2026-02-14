@@ -1,9 +1,6 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useMemo } from 'react';
+import useSWR from 'swr';
 import { IndexCard } from '@/components/stock/IndexCard';
-import { UpDownDistribution } from '@/components/stock/UpDownDistribution';
-import { MoneyFlowChart } from '@/components/stock/MoneyFlowChart';
-import { EnhancedMarketSentiment } from '@/components/stock/EnhancedMarketSentiment';
-import { LimitUpStats } from '@/components/stock/LimitUpStats';
 import { SectorList } from '@/components/stock/SectorList';
 import { Card } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -11,118 +8,96 @@ import { Clock, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn, getChangeColor } from '@/lib/utils';
 import {
-  fetchIndices,
-  fetchHotSectors,
-  fetchLimitUpList,
-  fetchUpDownDistribution,
-  fetchEnhancedSentiment,
-  fetchNorthFlow,
-  fetchHsgtTop10,
-  type EnhancedSentimentData
+  fetchMarketOverviewBundle,
+  type MarketOverviewBundle,
 } from '@/services/stockService';
-import type { IndexData, SectorData, LimitUpData } from '@/types';
 
-// 定义北向资金和涨跌分布的类型
-interface NorthFlowData {
-  net_inflow: number;
-  sh_inflow: number;
-  sz_inflow: number;
-  cumulative_30d: number;
-  time_series: { date: string; amount: number }[];
+const UpDownDistribution = lazy(() =>
+  import('@/components/stock/UpDownDistribution').then((m) => ({ default: m.UpDownDistribution }))
+);
+const MoneyFlowChart = lazy(() =>
+  import('@/components/stock/MoneyFlowChart').then((m) => ({ default: m.MoneyFlowChart }))
+);
+const EnhancedMarketSentiment = lazy(() =>
+  import('@/components/stock/EnhancedMarketSentiment').then((m) => ({ default: m.EnhancedMarketSentiment }))
+);
+const LimitUpStats = lazy(() =>
+  import('@/components/stock/LimitUpStats').then((m) => ({ default: m.LimitUpStats }))
+);
+
+const MARKET_OVERVIEW_SNAPSHOT_KEY = 'alphapulse:market-overview:snapshot';
+const MARKET_OVERVIEW_SNAPSHOT_TTL = 5 * 60 * 1000;
+
+function loadMarketOverviewSnapshot(): MarketOverviewBundle | undefined {
+  if (typeof window === 'undefined') return undefined;
+
+  try {
+    const raw = window.localStorage.getItem(MARKET_OVERVIEW_SNAPSHOT_KEY);
+    if (!raw) return undefined;
+
+    const parsed = JSON.parse(raw) as { savedAt?: number; data?: MarketOverviewBundle };
+    if (!parsed?.savedAt || !parsed?.data) return undefined;
+
+    if (Date.now() - parsed.savedAt > MARKET_OVERVIEW_SNAPSHOT_TTL) {
+      window.localStorage.removeItem(MARKET_OVERVIEW_SNAPSHOT_KEY);
+      return undefined;
+    }
+
+    return parsed.data;
+  } catch {
+    return undefined;
+  }
 }
 
-interface UpDownDistributionData {
-  up_count: number;
-  down_count: number;
-  flat_count: number;
-  limit_up: number;
-  limit_down: number;
-  distribution: { range: string; count: number; type: 'limit_up' | 'up' | 'flat' | 'down' | 'limit_down' }[];
-}
+function saveMarketOverviewSnapshot(data: MarketOverviewBundle): void {
+  if (typeof window === 'undefined') return;
 
-interface HsgtItem {
-  ts_code: string;
-  name: string;
-  amount: number;
-  close: number;
-  change: number;
-  rank: number;
-  market_type: string;
-  net_amount: number | null;
+  try {
+    window.localStorage.setItem(
+      MARKET_OVERVIEW_SNAPSHOT_KEY,
+      JSON.stringify({ savedAt: Date.now(), data })
+    );
+  } catch {
+    // ignore storage quota errors
+  }
 }
 
 export function MarketOverview() {
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [indices, setIndices] = useState<IndexData[]>([]);
-  const [sectors, setSectors] = useState<SectorData[]>([]);
-  const [limitUpList, setLimitUpList] = useState<LimitUpData[]>([]);
-  const [upDownDistribution, setUpDownDistribution] = useState<UpDownDistributionData | null>(null);
-  const [enhancedSentiment, setEnhancedSentiment] = useState<EnhancedSentimentData | null>(null);
-  const [northFlow, setNorthFlow] = useState<NorthFlowData | null>(null);
-  const [hsgtTop10, setHsgtTop10] = useState<HsgtItem[]>([]);
-  const [updateTime, setUpdateTime] = useState('');
-
-  const loadData = async () => {
-    console.log('开始加载数据...');
-
-    try {
-      // 并行加载所有数据，每个请求独立处理错误
-      const results = await Promise.allSettled([
-        fetchIndices(),
-        fetchHotSectors(20),
-        fetchLimitUpList(20),
-        fetchUpDownDistribution(),
-        fetchEnhancedSentiment(),
-        fetchNorthFlow(30),
-        fetchHsgtTop10()
-      ]);
-
-      console.log('数据加载完成:', results.map((r, i) =>
-        `${['indices', 'sectors', 'limitUp', 'upDown', 'sentiment', 'northFlow', 'hsgt'][i]}: ${r.status}`
-      ));
-
-      // 分别处理每个结果
-      if (results[0].status === 'fulfilled') {
-        setIndices(results[0].value as IndexData[]);
-      }
-      if (results[1].status === 'fulfilled') {
-        setSectors(results[1].value as SectorData[]);
-      }
-      if (results[2].status === 'fulfilled') {
-        setLimitUpList(results[2].value as LimitUpData[]);
-      }
-      if (results[3].status === 'fulfilled') {
-        setUpDownDistribution(results[3].value as UpDownDistributionData);
-      }
-      if (results[4].status === 'fulfilled') {
-        setEnhancedSentiment(results[4].value as EnhancedSentimentData);
-      }
-      if (results[5].status === 'fulfilled') {
-        setNorthFlow(results[5].value as NorthFlowData);
-      }
-      if (results[6].status === 'fulfilled') {
-        setHsgtTop10(results[6].value as HsgtItem[]);
-      }
-
-      // 更新时间
-      const now = new Date();
-      setUpdateTime(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`);
-    } catch (error) {
-      console.error('加载数据失败:', error);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+  const { data, isLoading, isValidating, mutate } = useSWR(
+    'market:overview:bundle',
+    () => fetchMarketOverviewBundle(),
+    {
+      dedupingInterval: 30_000,
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+      fallbackData: loadMarketOverviewSnapshot(),
+      onSuccess: (nextData) => {
+        saveMarketOverviewSnapshot(nextData);
+      },
     }
-  };
+  );
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  const loading = isLoading && !data;
+  const refreshing = isValidating && !!data;
+
+  const indices = data?.indices || [];
+  const sectors = data?.sectors || [];
+  const limitUpList = data?.limitUpList || [];
+  const upDownDistribution = data?.upDownDistribution || null;
+  const enhancedSentiment = data?.enhancedSentiment || null;
+  const northFlow = data?.northFlow || null;
+  const hsgtTop10 = data?.hsgtTop10 || [];
+  const updateTime = data?.updateTime || '';
+  const upSectors = useMemo(() => sectors.filter(s => s.pct_change > 0).slice(0, 10), [sectors]);
+  const downSectors = useMemo(() => (
+    sectors
+      .filter(s => s.pct_change < 0)
+      .sort((a, b) => a.pct_change - b.pct_change)
+      .slice(0, 10)
+  ), [sectors]);
 
   const handleRefresh = () => {
-    setRefreshing(true);
-    loadData();
+    mutate(fetchMarketOverviewBundle(true), { revalidate: false });
   };
 
   if (loading) {
@@ -182,62 +157,70 @@ export function MarketOverview() {
 
       {/* 涨跌分布 + 北向资金流向 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {upDownDistribution ? (
-          <UpDownDistribution data={upDownDistribution} className="min-h-[480px]" />
-        ) : (
-          <Card className="p-4 border-slate-200 min-h-[480px]">
-            <h3 className="text-lg font-semibold text-slate-900 mb-4">涨跌分布</h3>
-            <div className="h-48 flex items-center justify-center text-slate-500">
-              暂无数据
-            </div>
-          </Card>
-        )}
-        {northFlow ? (
-          <MoneyFlowChart data={northFlow} className="min-h-[480px]" />
-        ) : (
-          <Card className="p-4 border-slate-200 min-h-[480px]">
-            <h3 className="text-lg font-semibold text-slate-900 mb-4">北向资金流向</h3>
-            <div className="h-48 flex items-center justify-center text-slate-500">
-              暂无数据
-            </div>
-          </Card>
-        )}
+        <Suspense fallback={<Skeleton className="h-[480px]" />}>
+          {upDownDistribution ? (
+            <UpDownDistribution data={upDownDistribution} className="min-h-[480px]" />
+          ) : (
+            <Card className="p-4 border-slate-200 min-h-[480px]">
+              <h3 className="text-lg font-semibold text-slate-900 mb-4">涨跌分布</h3>
+              <div className="h-48 flex items-center justify-center text-slate-500">
+                暂无数据
+              </div>
+            </Card>
+          )}
+        </Suspense>
+        <Suspense fallback={<Skeleton className="h-[480px]" />}>
+          {northFlow ? (
+            <MoneyFlowChart data={northFlow} className="min-h-[480px]" />
+          ) : (
+            <Card className="p-4 border-slate-200 min-h-[480px]">
+              <h3 className="text-lg font-semibold text-slate-900 mb-4">北向资金流向</h3>
+              <div className="h-48 flex items-center justify-center text-slate-500">
+                暂无数据
+              </div>
+            </Card>
+          )}
+        </Suspense>
       </div>
 
       {/* 市场情绪面板（增强版） */}
-      <EnhancedMarketSentiment
-        data={enhancedSentiment}
-        loading={loading}
-        className="min-h-[400px]"
-      />
+      <Suspense fallback={<Skeleton className="h-[400px]" />}>
+        <EnhancedMarketSentiment
+          data={enhancedSentiment}
+          loading={loading}
+          className="min-h-[400px]"
+        />
+      </Suspense>
 
       {/* 涨跌停统计 */}
-      {limitUpList.length > 0 && upDownDistribution ? (
-        <LimitUpStats
-          limitUpList={limitUpList}
-          limitUpCount={upDownDistribution.limit_up}
-          limitDownCount={upDownDistribution.limit_down}
-          brokenCount={enhancedSentiment?.limitStats.zhabanCount ?? 0}
-          maxLimitCount={enhancedSentiment?.limitStats.maxLianban ?? 0}
-        />
-      ) : (
-        <Card className="p-4 border-slate-200">
-          <h3 className="text-lg font-semibold text-slate-900 mb-4">涨跌停统计</h3>
-          <div className="h-48 flex items-center justify-center text-slate-500">
-            暂无数据
-          </div>
-        </Card>
-      )}
+      <Suspense fallback={<Skeleton className="h-[320px]" />}>
+        {limitUpList.length > 0 && upDownDistribution ? (
+          <LimitUpStats
+            limitUpList={limitUpList}
+            limitUpCount={upDownDistribution.limit_up}
+            limitDownCount={upDownDistribution.limit_down}
+            brokenCount={enhancedSentiment?.limitStats.zhabanCount ?? 0}
+            maxLimitCount={enhancedSentiment?.limitStats.maxLianban ?? 0}
+          />
+        ) : (
+          <Card className="p-4 border-slate-200">
+            <h3 className="text-lg font-semibold text-slate-900 mb-4">涨跌停统计</h3>
+            <div className="h-48 flex items-center justify-center text-slate-500">
+              暂无数据
+            </div>
+          </Card>
+        )}
+      </Suspense>
 
       {/* 板块涨幅榜 + 板块跌幅榜 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <SectorList
-          sectors={sectors.filter(s => s.pct_change > 0).slice(0, 10)}
+          sectors={upSectors}
           title="板块涨幅榜"
           type="up"
         />
         <SectorList
-          sectors={sectors.filter(s => s.pct_change < 0).sort((a, b) => a.pct_change - b.pct_change).slice(0, 10)}
+          sectors={downSectors}
           title="板块跌幅榜"
           type="down"
         />

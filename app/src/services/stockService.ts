@@ -1,5 +1,6 @@
 import { supabaseStock, supabaseNews } from '@/lib/supabase';
 import type { IndexData, StockBasic, SectorData, LimitUpData, NewsItem, MarketSentiment, DailyData, MoneyFlowData } from '@/types';
+import { requestWithCache } from '@/lib/requestManager';
 import {
   mockIndices,
   mockUpDownDistribution,
@@ -68,6 +69,41 @@ function getRecentTradeDates(count = 5): string[] {
   return dates;
 }
 
+function stableStringify(value: unknown): string {
+  if (value === null || value === undefined) return String(value);
+  if (typeof value !== 'object') return String(value);
+
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(',')}]`;
+  }
+
+  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
+  return `{${entries.map(([k, v]) => `${k}:${stableStringify(v)}`).join(',')}}`;
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T) => Promise<R>
+): Promise<R[]> {
+  if (items.length === 0) return [];
+
+  const results: R[] = new Array(items.length);
+  let currentIndex = 0;
+
+  const worker = async () => {
+    while (currentIndex < items.length) {
+      const itemIndex = currentIndex;
+      currentIndex += 1;
+      results[itemIndex] = await mapper(items[itemIndex]);
+    }
+  };
+
+  const workerCount = Math.min(Math.max(concurrency, 1), items.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
+}
+
 /**
  * 从 new_share 表批量获取新股名称
  * 用于降级获取 stock_basic 表中没有的新上市股票名称
@@ -102,6 +138,89 @@ async function fetchNewShareNames(tsCodes: string[]): Promise<Map<string, { name
   }
 
   return nameMap;
+}
+
+export interface NorthFlowPayload {
+  net_inflow: number;
+  sh_inflow: number;
+  sz_inflow: number;
+  cumulative_30d: number;
+  cumulative_week?: number;
+  change_from_yesterday?: number;
+  change_percent?: number;
+  sh_buy?: number;
+  sh_sell?: number;
+  sz_buy?: number;
+  sz_sell?: number;
+  time_series: { date: string; amount: number; hgt?: number; sgt?: number }[];
+}
+
+export interface UpDownDistributionPayload {
+  up_count: number;
+  down_count: number;
+  flat_count: number;
+  limit_up: number;
+  limit_down: number;
+  distribution: { range: string; count: number; color?: string; type?: 'limit_up' | 'up' | 'flat' | 'down' | 'limit_down' }[];
+  lianbanStats?: {
+    oneBoard: number;
+    twoBoard: number;
+    threeBoard: number;
+    fourBoard: number;
+    fivePlus: number;
+  };
+  zhabanCount?: number;
+  fengbanRate?: number;
+  topIndustries?: { name: string; count: number }[];
+  maxLianban?: number;
+  totalAttempts?: number;
+}
+
+export interface HsgtTop10PayloadItem {
+  ts_code: string;
+  name: string;
+  amount: number;
+  close: number;
+  change: number;
+  rank: number;
+  market_type: string;
+  net_amount: number | null;
+}
+
+export interface MarketOverviewBundle {
+  indices: IndexData[];
+  sectors: SectorData[];
+  limitUpList: LimitUpData[];
+  upDownDistribution: UpDownDistributionPayload | null;
+  enhancedSentiment: EnhancedSentimentData | null;
+  northFlow: NorthFlowPayload | null;
+  hsgtTop10: HsgtTop10PayloadItem[];
+  updateTime: string;
+}
+
+export interface SectorHeatBundle {
+  heatmapData: { name: string; value: number; size: number; type: string }[];
+  industryHotList: SectorHotData[];
+  conceptHotList: SectorHotData[];
+  hotStockList: HotStockData[];
+  kplConcepts: Array<{
+    ts_code?: string;
+    name: string;
+    limit_up_count: number;
+    up_count: number;
+    trade_date?: string;
+    heat_score?: number;
+    leading_stock?: string;
+    leading_change?: number;
+    total?: number;
+  }>;
+}
+
+export interface StockDetailBundle {
+  detail: Awaited<ReturnType<typeof fetchStockFullDetail>>;
+  kLineData: Awaited<ReturnType<typeof fetchKLineData>>;
+  moneyFlowData: Awaited<ReturnType<typeof fetchStockMoneyFlow>>;
+  timeSeriesData: Awaited<ReturnType<typeof fetchTimeSeriesData>>;
 }
 
 // ===========================================
@@ -657,7 +776,7 @@ export async function fetchLimitDownList(limit = 20): Promise<LimitUpData[]> {
  * 获取涨跌分布数据（增强版）
  * 包含：连板分布、炸板统计、行业热度
  */
-export async function fetchUpDownDistribution() {
+export async function fetchUpDownDistribution(): Promise<UpDownDistributionPayload | null> {
   try {
     // 先获取 limit_list_d 表的最新日期
     const { data: latestData } = await supabaseStock
@@ -857,94 +976,99 @@ export interface EnhancedSentimentData {
   };
 }
 
+function buildEnhancedSentiment(
+  distribution: UpDownDistributionPayload | null,
+  northFlowData: NorthFlowPayload | null,
+  dailyAmountData: { totalAmount: number; amountChange: number; avgTurnover: number } | null
+): EnhancedSentimentData | null {
+  if (!distribution) {
+    return null;
+  }
+
+  const {
+    up_count,
+    down_count,
+    flat_count,
+    limit_up,
+    limit_down,
+    lianbanStats,
+    zhabanCount,
+    fengbanRate,
+    maxLianban,
+    topIndustries,
+  } = distribution;
+
+  const totalStocks = up_count + down_count + flat_count;
+  const upRatio = totalStocks > 0 ? (up_count / totalStocks) * 100 : 50;
+  const limitRatio = (limit_up + limit_down) > 0 ? (limit_up / (limit_up + limit_down)) * 100 : 50;
+  const fengRate = fengbanRate || 50;
+
+  const score = Math.round(upRatio * 0.4 + limitRatio * 0.3 + fengRate * 0.3);
+  const clampedScore = Math.min(100, Math.max(0, score));
+
+  let label = '中性';
+  if (clampedScore >= 80) label = '极度贪婪';
+  else if (clampedScore >= 65) label = '贪婪';
+  else if (clampedScore >= 55) label = '偏多';
+  else if (clampedScore <= 20) label = '极度恐惧';
+  else if (clampedScore <= 35) label = '恐惧';
+  else if (clampedScore <= 45) label = '偏空';
+
+  const trend: 'up' | 'down' | 'flat' = upRatio > 55 ? 'up' : upRatio < 45 ? 'down' : 'flat';
+
+  return {
+    sentiment: {
+      score: clampedScore,
+      label,
+      trend,
+    },
+    thermometer: {
+      upCount: up_count,
+      downCount: down_count,
+      flatCount: flat_count,
+      limitUp: limit_up,
+      limitDown: limit_down,
+      upRatio: Math.round(upRatio),
+    },
+    capital: {
+      totalAmount: dailyAmountData?.totalAmount || 0,
+      amountChange: dailyAmountData?.amountChange || 0,
+      avgTurnover: dailyAmountData?.avgTurnover || 0,
+      northFlow: northFlowData?.net_inflow || 0,
+    },
+    limitStats: {
+      lianbanStats: lianbanStats || { oneBoard: 0, twoBoard: 0, threeBoard: 0, fourBoard: 0, fivePlus: 0 },
+      zhabanCount: zhabanCount || 0,
+      fengbanRate: fengbanRate || 0,
+      maxLianban: maxLianban || 0,
+      topIndustries: topIndustries || [],
+    },
+  };
+}
+
 /**
  * 获取增强版市场情绪数据（多维度）
  */
-export async function fetchEnhancedSentiment(): Promise<EnhancedSentimentData | null> {
+export async function fetchEnhancedSentiment(params?: {
+  distribution?: UpDownDistributionPayload | null;
+  northFlowData?: NorthFlowPayload | null;
+  dailyAmountData?: { totalAmount: number; amountChange: number; avgTurnover: number } | null;
+  signal?: AbortSignal;
+}): Promise<EnhancedSentimentData | null> {
   try {
-    // 并行获取所有需要的数据
     const [distribution, northFlowData, dailyAmountData] = await Promise.all([
-      fetchUpDownDistribution(),
-      fetchNorthFlow(2), // 获取最近2天用于对比
-      fetchDailyTotalAmount()
+      params?.distribution !== undefined ? params.distribution : fetchUpDownDistribution(),
+      params?.northFlowData !== undefined ? params.northFlowData : fetchNorthFlow(2),
+      params?.dailyAmountData !== undefined ? params.dailyAmountData : fetchDailyTotalAmount(params?.signal),
     ]);
 
-    if (!distribution) {
+    const sentiment = buildEnhancedSentiment(distribution as UpDownDistributionPayload | null, northFlowData as NorthFlowPayload | null, dailyAmountData);
+    if (!sentiment) {
       console.warn('无法获取涨跌分布数据');
       return null;
     }
 
-    // 1. 计算情绪分数
-    // 使用类型断言访问扩展属性（fetchUpDownDistribution 返回的实际数据包含这些字段）
-    const dist = distribution as {
-      up_count: number;
-      down_count: number;
-      flat_count: number;
-      limit_up: number;
-      limit_down: number;
-      lianbanStats?: { oneBoard: number; twoBoard: number; threeBoard: number; fourBoard: number; fivePlus: number };
-      zhabanCount?: number;
-      fengbanRate?: number;
-      maxLianban?: number;
-      topIndustries?: { name: string; count: number }[];
-    };
-    const { up_count, down_count, flat_count, limit_up, limit_down, lianbanStats, zhabanCount, fengbanRate, maxLianban, topIndustries } = dist;
-
-    // 综合得分计算：涨跌比(40%) + 涨停跌停比(30%) + 封板率(30%)
-    const totalStocks = up_count + down_count + flat_count;
-    const upRatio = totalStocks > 0 ? (up_count / totalStocks) * 100 : 50;
-    const limitRatio = (limit_up + limit_down) > 0 ? (limit_up / (limit_up + limit_down)) * 100 : 50;
-    const fengRate = fengbanRate || 50;
-
-    const score = Math.round(upRatio * 0.4 + limitRatio * 0.3 + fengRate * 0.3);
-    const clampedScore = Math.min(100, Math.max(0, score));
-
-    // 情绪标签
-    let label = '中性';
-    if (clampedScore >= 80) label = '极度贪婪';
-    else if (clampedScore >= 65) label = '贪婪';
-    else if (clampedScore >= 55) label = '偏多';
-    else if (clampedScore <= 20) label = '极度恐惧';
-    else if (clampedScore <= 35) label = '恐惧';
-    else if (clampedScore <= 45) label = '偏空';
-
-    // 趋势判断（基于涨跌比）
-    const trend: 'up' | 'down' | 'flat' = upRatio > 55 ? 'up' : upRatio < 45 ? 'down' : 'flat';
-
-    // 2. 资金数据
-    const northFlow = northFlowData?.net_inflow || 0;
-    const totalAmount = dailyAmountData?.totalAmount || 0;
-    const amountChange = dailyAmountData?.amountChange || 0;
-    const avgTurnover = dailyAmountData?.avgTurnover || 0;
-
-    return {
-      sentiment: {
-        score: clampedScore,
-        label,
-        trend
-      },
-      thermometer: {
-        upCount: up_count,
-        downCount: down_count,
-        flatCount: flat_count,
-        limitUp: limit_up,
-        limitDown: limit_down,
-        upRatio: Math.round(upRatio)
-      },
-      capital: {
-        totalAmount,
-        amountChange,
-        avgTurnover,
-        northFlow
-      },
-      limitStats: {
-        lianbanStats: lianbanStats || { oneBoard: 0, twoBoard: 0, threeBoard: 0, fourBoard: 0, fivePlus: 0 },
-        zhabanCount: zhabanCount || 0,
-        fengbanRate: fengbanRate || 0,
-        maxLianban: maxLianban || 0,
-        topIndustries: topIndustries || []
-      }
-    };
+    return sentiment;
   } catch (error) {
     console.error('获取增强版市场情绪失败:', error);
     return null;
@@ -954,12 +1078,15 @@ export async function fetchEnhancedSentiment(): Promise<EnhancedSentimentData | 
 /**
  * 获取每日成交额统计
  */
-async function fetchDailyTotalAmount(): Promise<{ totalAmount: number; amountChange: number; avgTurnover: number } | null> {
+async function fetchDailyTotalAmount(signal?: AbortSignal): Promise<{ totalAmount: number; amountChange: number; avgTurnover: number } | null> {
   try {
+    const requestSignal = signal ?? new AbortController().signal;
+
     // 获取最近两个交易日的数据
     const { data: latestDates } = await supabaseStock
       .from('daily')
       .select('trade_date')
+      .abortSignal(requestSignal)
       .order('trade_date', { ascending: false })
       .limit(1);
 
@@ -971,6 +1098,7 @@ async function fetchDailyTotalAmount(): Promise<{ totalAmount: number; amountCha
     const { data: todayData } = await supabaseStock
       .from('daily')
       .select('amount')
+      .abortSignal(requestSignal)
       .eq('trade_date', latestDate);
 
     const totalAmount = todayData
@@ -982,6 +1110,7 @@ async function fetchDailyTotalAmount(): Promise<{ totalAmount: number; amountCha
     const { data: prevData } = await supabaseStock
       .from('daily')
       .select('amount')
+      .abortSignal(requestSignal)
       .eq('trade_date', prevDate);
 
     const prevAmount = prevData
@@ -996,6 +1125,7 @@ async function fetchDailyTotalAmount(): Promise<{ totalAmount: number; amountCha
       const { data: turnoverData, error: turnoverError } = await supabaseStock
         .from('daily_basic')
         .select('turnover_rate')
+        .abortSignal(requestSignal)
         .eq('trade_date', latestDate)
         .not('turnover_rate', 'is', null)
         .limit(1000); // 限制数量避免数据过多
@@ -1075,7 +1205,7 @@ export async function fetchMarketSentiment(): Promise<MarketSentiment | null> {
  * 获取北向资金数据
  * 使用 moneyflow_hsgt 表（沪深港通资金流向）
  */
-export async function fetchNorthFlow(days = 30) {
+export async function fetchNorthFlow(days = 30): Promise<NorthFlowPayload | null> {
   try {
     const { data, error } = await supabaseStock
       .from('moneyflow_hsgt')
@@ -1299,7 +1429,8 @@ async function fetchFromSource(
   source: typeof NEWS_SOURCES[0],
   limit: number,
   dateStart?: number,
-  dateEnd?: number
+  dateEnd?: number,
+  signal?: AbortSignal
 ): Promise<Array<{
   id: string;
   title: string;
@@ -1316,6 +1447,10 @@ async function fetchFromSource(
     let query = supabaseNews
       .from(source.tableName)
       .select('id, title, content, display_time, images');
+
+    if (signal) {
+      query = query.abortSignal(signal);
+    }
 
     // 添加日期范围过滤
     if (dateStart !== undefined) {
@@ -1392,50 +1527,108 @@ export async function fetchRealTimeNews(params: {
   images?: string[];
 }>> {
   const { sources, limit = 30, totalLimit = 100, dateFilter } = params;
+  const cacheKey = `news:realtime:${stableStringify({ sources: sources || null, limit, totalLimit, dateFilter: dateFilter || null })}`;
 
-  // 计算日期范围的时间戳
-  let dateStart: number | undefined;
-  let dateEnd: number | undefined;
+  return requestWithCache(
+    cacheKey,
+    'fetchRealTimeNews',
+    async (signal) => {
+      // 计算日期范围的时间戳
+      let dateStart: number | undefined;
+      let dateEnd: number | undefined;
 
-  if (dateFilter) {
-    // 解析日期字符串，生成当天的开始和结束时间戳
-    const date = new Date(dateFilter);
-    date.setHours(0, 0, 0, 0);
-    dateStart = Math.floor(date.getTime() / 1000);
+      if (dateFilter) {
+        const date = new Date(dateFilter);
+        date.setHours(0, 0, 0, 0);
+        dateStart = Math.floor(date.getTime() / 1000);
 
-    const endDate = new Date(dateFilter);
-    endDate.setHours(23, 59, 59, 999);
-    dateEnd = Math.floor(endDate.getTime() / 1000);
-  }
+        const endDate = new Date(dateFilter);
+        endDate.setHours(23, 59, 59, 999);
+        dateEnd = Math.floor(endDate.getTime() / 1000);
+      }
 
-  // 筛选要查询的新闻源
-  const targetSources = sources
-    ? NEWS_SOURCES.filter(s => sources.includes(s.key))
-    : NEWS_SOURCES;
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const rpcClient = supabaseNews as any;
+        let rpcQuery = rpcClient.rpc('get_realtime_news_aggregated', {
+          p_sources: sources && sources.length > 0 ? sources : null,
+          p_limit_per_source: limit,
+          p_total_limit: totalLimit,
+          p_date_filter: dateFilter ?? null,
+        });
 
-  if (targetSources.length === 0) {
-    console.warn('未指定有效的新闻源');
-    return [];
-  }
+        if (typeof rpcQuery?.abortSignal === 'function') {
+          rpcQuery = rpcQuery.abortSignal(signal);
+        }
 
-  try {
-    // 并行获取所有源的数据
-    const results = await Promise.all(
-      targetSources.map(source => fetchFromSource(source, limit, dateStart, dateEnd))
-    );
+        const { data: rpcData, error: rpcError } = await rpcQuery;
+        if (!rpcError && Array.isArray(rpcData)) {
+          const sourceNameMap = new Map(NEWS_SOURCES.map(item => [item.key, item.name]));
 
-    // 合并所有数据
-    const allNews = results.flat();
+          return rpcData.map((item: Record<string, unknown>) => {
+            const displayTime = Number(item.display_time) || 0;
+            const { time, date } = formatNewsTime(displayTime);
 
-    // 按时间倒序排序
-    allNews.sort((a, b) => b.display_time - a.display_time);
+            let parsedImages: string[] | undefined;
+            if (typeof item.images === 'string' && item.images.trim()) {
+              try {
+                parsedImages = JSON.parse(item.images);
+              } catch {
+                parsedImages = undefined;
+              }
+            }
 
-    // 返回限定条数
-    return allNews.slice(0, totalLimit);
-  } catch (error) {
-    console.error('获取实时新闻失败:', error);
-    return [];
-  }
+            const sourceKey = String(item.source_key || '');
+            return {
+              id: String(item.id || ''),
+              title: String(item.title || ''),
+              content: String(item.content || ''),
+              source: sourceNameMap.get(sourceKey) || String(item.source || sourceKey),
+              sourceKey,
+              display_time: displayTime,
+              time,
+              date,
+              importance: getNewsImportance(String(item.title || ''), String(item.content || '')),
+              images: parsedImages,
+            } as {
+              id: string;
+              title: string;
+              content: string;
+              source: string;
+              sourceKey: string;
+              display_time: number;
+              time: string;
+              date: string;
+              importance: 'high' | 'normal';
+              images?: string[];
+            };
+          });
+        }
+      } catch (rpcErr) {
+        console.warn('RPC get_realtime_news_aggregated 调用失败，降级前端聚合:', rpcErr);
+      }
+
+      const targetSources = sources
+        ? NEWS_SOURCES.filter(s => sources.includes(s.key))
+        : NEWS_SOURCES;
+
+      if (targetSources.length === 0) {
+        console.warn('未指定有效的新闻源');
+        return [];
+      }
+
+      const results = await mapWithConcurrency(
+        targetSources,
+        4,
+        (source) => fetchFromSource(source, limit, dateStart, dateEnd, signal)
+      );
+
+      const allNews = results.flat();
+      allNews.sort((a, b) => b.display_time - a.display_time);
+      return allNews.slice(0, totalLimit);
+    },
+    { ttlMs: 5_000 }
+  );
 }
 
 /**
@@ -1562,14 +1755,16 @@ export interface StockQuoteItem {
  * 获取股票列表带行情数据（分页）
  * 通过 daily_basic 表获取，按成交额降序
  */
-export async function fetchStockListWithQuotes(params: {
+async function fetchStockListWithQuotesRaw(params: {
   keyword?: string;
   limit?: number;
   offset?: number;
   sortBy?: 'amount' | 'pct_chg' | 'turnover_rate' | 'total_mv';
   sortOrder?: 'asc' | 'desc';
-} = {}): Promise<{ data: StockQuoteItem[]; total: number }> {
+} = {}, signal?: AbortSignal): Promise<{ data: StockQuoteItem[]; total: number }> {
   try {
+    const requestSignal = signal ?? new AbortController().signal;
+
     const {
       keyword,
       limit = 50,
@@ -1582,6 +1777,7 @@ export async function fetchStockListWithQuotes(params: {
     const { data: latestData } = await supabaseStock
       .from('daily_basic')
       .select('trade_date')
+      .abortSignal(requestSignal)
       .order('trade_date', { ascending: false })
       .limit(1);
 
@@ -1599,6 +1795,7 @@ export async function fetchStockListWithQuotes(params: {
       const { data: basicData } = await supabaseStock
         .from('stock_basic')
         .select('ts_code')
+        .abortSignal(requestSignal)
         .or(`name.ilike.%${keyword}%,ts_code.ilike.%${keyword}%,symbol.ilike.%${keyword}%`);
 
       if (basicData && basicData.length > 0) {
@@ -1612,6 +1809,7 @@ export async function fetchStockListWithQuotes(params: {
     let countQuery = supabaseStock
       .from('daily_basic')
       .select('ts_code', { count: 'exact', head: true })
+      .abortSignal(requestSignal)
       .eq('trade_date', latestDate);
 
     if (matchedCodes) {
@@ -1633,6 +1831,7 @@ export async function fetchStockListWithQuotes(params: {
       let dailyQuery = supabaseStock
         .from('daily')
         .select('ts_code, open, high, low, close, pre_close, change, pct_chg, vol, amount')
+        .abortSignal(requestSignal)
         .eq('trade_date', latestDate)
         .order(sortBy, { ascending: sortOrder === 'asc' })
         .range(offset, offset + limit - 1);
@@ -1677,6 +1876,7 @@ export async function fetchStockListWithQuotes(params: {
           total_mv,
           circ_mv
         `)
+        .abortSignal(requestSignal)
         .eq('trade_date', latestDate)
         .in('ts_code', tsCodes);
 
@@ -1688,6 +1888,7 @@ export async function fetchStockListWithQuotes(params: {
       const { data: stockBasicData, error: stockBasicError } = await supabaseStock
         .from('stock_basic')
         .select('ts_code, symbol, name, industry')
+        .abortSignal(requestSignal)
         .in('ts_code', tsCodes);
 
       if (stockBasicError) {
@@ -1790,6 +1991,7 @@ export async function fetchStockListWithQuotes(params: {
           total_mv,
           circ_mv
         `)
+        .abortSignal(requestSignal)
         .eq('trade_date', latestDate)
         .order(sortBy, { ascending: sortOrder === 'asc' })
         .range(offset, offset + limit - 1);
@@ -1815,6 +2017,7 @@ export async function fetchStockListWithQuotes(params: {
       const { data: dailyData, error: dailyError } = await supabaseStock
         .from('daily')
         .select('ts_code, open, high, low, close, pre_close, change, pct_chg, vol, amount')
+        .abortSignal(requestSignal)
         .eq('trade_date', latestDate)
         .in('ts_code', tsCodes);
 
@@ -1826,6 +2029,7 @@ export async function fetchStockListWithQuotes(params: {
       const { data: stockBasicData, error: stockBasicError } = await supabaseStock
         .from('stock_basic')
         .select('ts_code, symbol, name, industry')
+        .abortSignal(requestSignal)
         .in('ts_code', tsCodes);
 
       if (stockBasicError) {
@@ -1908,6 +2112,22 @@ export async function fetchStockListWithQuotes(params: {
     console.error('获取股票列表行情失败:', error);
     return { data: [], total: 0 };
   }
+}
+
+export async function fetchStockListWithQuotes(params: {
+  keyword?: string;
+  limit?: number;
+  offset?: number;
+  sortBy?: 'amount' | 'pct_chg' | 'turnover_rate' | 'total_mv';
+  sortOrder?: 'asc' | 'desc';
+} = {}): Promise<{ data: StockQuoteItem[]; total: number }> {
+  const cacheKey = `stock:list:quotes:${stableStringify(params)}`;
+  return requestWithCache(
+    cacheKey,
+    'fetchStockListWithQuotes',
+    (signal) => fetchStockListWithQuotesRaw(params, signal),
+    { ttlMs: 10_000 }
+  );
 }
 
 /**
@@ -2439,6 +2659,35 @@ export async function fetchTimeSeriesData(tsCode: string, preClose?: number) {
 }
 
 /**
+ * 股票详情页面聚合数据
+ */
+export async function fetchStockDetailBundle(tsCode: string): Promise<StockDetailBundle> {
+  const cacheKey = `stock:detail:bundle:${tsCode}`;
+  return requestWithCache(
+    cacheKey,
+    'fetchStockDetailBundle',
+    async () => {
+      const [detail, kLineData, moneyFlowData] = await Promise.all([
+        fetchStockFullDetail(tsCode),
+        fetchKLineData(tsCode, 60),
+        fetchStockMoneyFlow(tsCode, 5),
+      ]);
+
+      const preClose = (detail as { pre_close?: number } | null)?.pre_close || 0;
+      const timeSeriesData = await fetchTimeSeriesData(tsCode, preClose || undefined);
+
+      return {
+        detail,
+        kLineData,
+        moneyFlowData,
+        timeSeriesData,
+      };
+    },
+    { ttlMs: 15_000 }
+  );
+}
+
+/**
  * 获取资金流向数据
  * 使用 moneyflow 表
  */
@@ -2664,6 +2913,79 @@ export async function fetchHsgtTop10() {
   }
 }
 
+function getFormattedUpdateTime(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+}
+
+/**
+ * 市场概览聚合数据（优先走 RPC，失败时前端聚合）
+ */
+export async function fetchMarketOverviewBundle(forceRefresh = false): Promise<MarketOverviewBundle> {
+  return requestWithCache(
+    'market:overview:bundle',
+    'fetchMarketOverviewBundle',
+    async (signal) => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const rpcClient = supabaseStock as any;
+        let rpcQuery = rpcClient.rpc('get_market_overview_bundle');
+        if (typeof rpcQuery?.abortSignal === 'function') {
+          rpcQuery = rpcQuery.abortSignal(signal);
+        }
+
+        const { data: rpcData, error: rpcError } = await rpcQuery;
+        if (!rpcError && rpcData) {
+          const payload = typeof rpcData === 'string' ? JSON.parse(rpcData) : rpcData;
+          return {
+            indices: payload.indices || [],
+            sectors: payload.sectors || [],
+            limitUpList: payload.limitUpList || [],
+            upDownDistribution: payload.upDownDistribution || null,
+            enhancedSentiment: payload.enhancedSentiment || null,
+            northFlow: payload.northFlow || null,
+            hsgtTop10: payload.hsgtTop10 || [],
+            updateTime: payload.updateTime || getFormattedUpdateTime(),
+          } as MarketOverviewBundle;
+        }
+      } catch (rpcErr) {
+        console.warn('RPC get_market_overview_bundle 调用失败，降级前端聚合:', rpcErr);
+      }
+
+      const [indices, sectors, limitUpList, upDownDistribution, northFlow, hsgtTop10] = await Promise.all([
+        fetchIndices(),
+        fetchHotSectors(20),
+        fetchLimitUpList(20),
+        fetchUpDownDistribution(),
+        fetchNorthFlow(30),
+        fetchHsgtTop10(),
+      ]);
+
+      const enhancedSentiment = await fetchEnhancedSentiment({
+        distribution: upDownDistribution,
+        northFlowData: northFlow,
+        dailyAmountData: null,
+        signal,
+      });
+
+      return {
+        indices,
+        sectors,
+        limitUpList,
+        upDownDistribution,
+        enhancedSentiment,
+        northFlow,
+        hsgtTop10: hsgtTop10 as HsgtTop10PayloadItem[],
+        updateTime: getFormattedUpdateTime(),
+      };
+    },
+    {
+      ttlMs: 120_000,
+      allowCache: !forceRefresh,
+    }
+  );
+}
+
 // ===========================================
 // 热榜数据服务（ths_hot表）
 // ===========================================
@@ -2799,14 +3121,23 @@ export async function fetchConceptHotList(limit = 15): Promise<SectorHotData[]> 
 export async function fetchHotStockList(limit = 20): Promise<HotStockData[]> {
   const data = await fetchThsHot('热股', limit);
   return data.map(item => {
-    // 解析 concept 字段（JSON数组字符串）
+    // 解析 concept 字段（兼容 JSON 字符串、逗号分隔字符串、数组）
     let concepts: string[] = [];
-    if (item.concept) {
-      try {
-        concepts = JSON.parse(item.concept);
-      } catch {
-        // 如果不是JSON，按逗号分割
-        concepts = item.concept.split(',').map(c => c.trim()).filter(Boolean);
+    if (Array.isArray(item.concept)) {
+      concepts = item.concept.map((c) => String(c).trim()).filter(Boolean);
+    } else if (typeof item.concept === 'string') {
+      const rawConcept = item.concept.trim();
+      if (rawConcept) {
+        try {
+          const parsed = JSON.parse(rawConcept);
+          if (Array.isArray(parsed)) {
+            concepts = parsed.map((c) => String(c).trim()).filter(Boolean);
+          } else {
+            concepts = rawConcept.split(/[，,]/).map(c => c.trim()).filter(Boolean);
+          }
+        } catch {
+          concepts = rawConcept.split(/[，,]/).map(c => c.trim()).filter(Boolean);
+        }
       }
     }
     return {
@@ -2820,6 +3151,145 @@ export async function fetchHotStockList(limit = 20): Promise<HotStockData[]> {
   });
 }
 
+function buildSectorHeatmapDataFromLists(
+  industryData: SectorHotData[],
+  conceptData: SectorHotData[],
+  limit = 30
+): { name: string; value: number; size: number; type: string }[] {
+  const allData = [
+    ...industryData.map(item => ({ ...item, type: 'industry' })),
+    ...conceptData.map(item => ({ ...item, type: 'concept' }))
+  ];
+
+  allData.sort((a, b) => {
+    if (a.pct_change > 0 && b.pct_change <= 0) return -1;
+    if (a.pct_change <= 0 && b.pct_change > 0) return 1;
+    return Math.abs(b.pct_change) - Math.abs(a.pct_change);
+  });
+
+  const maxHot = Math.max(...allData.map(d => d.hot || 50), 1);
+
+  return allData.slice(0, limit).map((item) => ({
+    name: item.ts_name,
+    value: item.pct_change,
+    size: Math.max(30, Math.round(item.hot / maxHot * 70 + 30)),
+    type: item.type
+  }));
+}
+
+function toFiniteNumber(value: unknown, fallback = 0): number {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function toStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim()).filter(Boolean);
+  }
+
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return [];
+
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) {
+        return parsed.map((item) => String(item).trim()).filter(Boolean);
+      }
+    } catch {
+      // ignore parse error, fallback to split
+    }
+
+    return text.split(/[，,]/).map((item) => item.trim()).filter(Boolean);
+  }
+
+  return [];
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object') {
+    return value as Record<string, unknown>;
+  }
+  return {};
+}
+
+function normalizeSectorHotData(items: unknown[]): SectorHotData[] {
+  return items.map((item, index) => {
+    const row = asRecord(item);
+    return {
+      ts_code: String(row.ts_code ?? ''),
+      ts_name: String(row.ts_name ?? row.name ?? `板块${index + 1}`),
+      rank: toFiniteNumber(row.rank, index + 1),
+      pct_change: toFiniteNumber(row.pct_change, 0),
+      hot: toFiniteNumber(row.hot, 0),
+    };
+  });
+}
+
+function normalizeHotStockData(items: unknown[]): HotStockData[] {
+  return items.map((item, index) => {
+    const row = asRecord(item);
+    return {
+      ts_code: String(row.ts_code ?? ''),
+      ts_name: String(row.ts_name ?? row.name ?? `热股${index + 1}`),
+      rank: toFiniteNumber(row.rank, index + 1),
+      pct_change: toFiniteNumber(row.pct_change, 0),
+      hot: toFiniteNumber(row.hot, 0),
+      concepts: toStringArray(row.concepts ?? row.concept),
+    };
+  });
+}
+
+function normalizeKplConcepts(items: unknown[]): SectorHeatBundle['kplConcepts'] {
+  return items.map((item, index) => {
+    const row = asRecord(item);
+    const tradeDateRaw = row.trade_date;
+    const leadingStockRaw = row.leading_stock;
+    return {
+      ts_code: row.ts_code ? String(row.ts_code) : undefined,
+      name: String(row.name ?? `题材${index + 1}`),
+      limit_up_count: toFiniteNumber(row.limit_up_count ?? row.z_t_num, 0),
+      up_count: toFiniteNumber(row.up_count ?? row.up_num, 0),
+      trade_date: tradeDateRaw ? String(tradeDateRaw) : undefined,
+      heat_score: toFiniteNumber(row.heat_score, 0),
+      leading_stock: leadingStockRaw ? String(leadingStockRaw) : undefined,
+      leading_change: toFiniteNumber(row.leading_change, 0),
+      total: toFiniteNumber(row.total, 0),
+    };
+  });
+}
+
+function normalizeHeatmapData(items: unknown[]): SectorHeatBundle['heatmapData'] {
+  return items.map((item, index) => {
+    const row = asRecord(item);
+    const rawType = String(row.type ?? 'industry').toLowerCase();
+    return {
+      name: String(row.name ?? row.ts_name ?? `板块${index + 1}`),
+      value: toFiniteNumber(row.value ?? row.pct_change, 0),
+      size: Math.max(30, toFiniteNumber(row.size, 50)),
+      type: rawType === 'concept' ? 'concept' : 'industry',
+    };
+  });
+}
+
+function normalizeSectorHeatBundlePayload(payload: unknown, limit = 30): SectorHeatBundle {
+  const row = asRecord(payload);
+  const industryHotList = normalizeSectorHotData(Array.isArray(row.industryHotList) ? row.industryHotList : []);
+  const conceptHotList = normalizeSectorHotData(Array.isArray(row.conceptHotList) ? row.conceptHotList : []);
+
+  const heatmapData = Array.isArray(row.heatmapData)
+    ? normalizeHeatmapData(row.heatmapData)
+    : buildSectorHeatmapDataFromLists(industryHotList, conceptHotList, limit);
+
+  return {
+    heatmapData,
+    industryHotList,
+    conceptHotList,
+    hotStockList: normalizeHotStockData(Array.isArray(row.hotStockList) ? row.hotStockList : []),
+    kplConcepts: normalizeKplConcepts(Array.isArray(row.kplConcepts) ? row.kplConcepts : []),
+  };
+}
+
 /**
  * 获取板块热力图数据（合并行业和概念板块）
  */
@@ -2830,35 +3300,54 @@ export async function fetchSectorHeatmapData(limit = 30): Promise<{ name: string
       fetchIndustryHotList(15),
       fetchConceptHotList(15)
     ]);
-
-    // 合并并计算热力图大小
-    const allData = [
-      ...industryData.map(item => ({ ...item, type: 'industry' })),
-      ...conceptData.map(item => ({ ...item, type: 'concept' }))
-    ];
-
-    // 按涨跌幅绝对值排序，涨幅大的排前面
-    allData.sort((a, b) => {
-      // 先按涨幅排序（涨的排前面）
-      if (a.pct_change > 0 && b.pct_change <= 0) return -1;
-      if (a.pct_change <= 0 && b.pct_change > 0) return 1;
-      // 同为涨或同为跌，按绝对值排序
-      return Math.abs(b.pct_change) - Math.abs(a.pct_change);
-    });
-
-    // 计算热力图大小（基于热度）
-    const maxHot = Math.max(...allData.map(d => d.hot || 50), 1);
-
-    return allData.slice(0, limit).map((item) => ({
-      name: item.ts_name,
-      value: item.pct_change,
-      size: Math.max(30, Math.round(item.hot / maxHot * 70 + 30)), // 基于热度的大小
-      type: item.type
-    }));
+    return buildSectorHeatmapDataFromLists(industryData, conceptData, limit);
   } catch (error) {
     console.error('获取热力图数据失败:', error);
     return [];
   }
+}
+
+/**
+ * 板块热点页面聚合数据（优先走 RPC，失败时前端聚合）
+ */
+export async function fetchSectorHeatBundle(limit = 30): Promise<SectorHeatBundle> {
+  const cacheKey = `sector:bundle:${limit}`;
+  return requestWithCache(
+    cacheKey,
+    'fetchSectorHeatBundle',
+    async () => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const rpcClient = supabaseStock as any;
+        const { data: rpcData, error: rpcError } = await rpcClient.rpc('get_sector_heat_bundle', {
+          p_limit: limit
+        });
+
+        if (!rpcError && rpcData) {
+          const payload = typeof rpcData === 'string' ? JSON.parse(rpcData) : rpcData;
+          return normalizeSectorHeatBundlePayload(payload, limit);
+        }
+      } catch (rpcErr) {
+        console.warn('RPC get_sector_heat_bundle 调用失败，降级前端聚合:', rpcErr);
+      }
+
+      const [industryHotList, conceptHotList, hotStockList, kplConcepts] = await Promise.all([
+        fetchIndustryHotList(30),
+        fetchConceptHotList(30),
+        fetchHotStockList(20),
+        fetchKplConcepts()
+      ]);
+
+      return normalizeSectorHeatBundlePayload({
+        heatmapData: buildSectorHeatmapDataFromLists(industryHotList, conceptHotList, limit),
+        industryHotList,
+        conceptHotList,
+        hotStockList,
+        kplConcepts
+      }, limit);
+    },
+    { ttlMs: 30_000 }
+  );
 }
 
 // ===========================================
@@ -2878,9 +3367,11 @@ export const stockService = {
   fetchRealTimeNews,
   fetchNewsBySource,
   NEWS_SOURCES,
+  fetchMarketOverviewBundle,
   fetchStockList,
   fetchStockListWithQuotes,
   fetchStockDetail,
+  fetchStockDetailBundle,
   fetchStockFullDetail,
   fetchStockDaily,
   fetchKLineData,
@@ -2898,6 +3389,7 @@ export const stockService = {
   fetchConceptHotList,
   fetchHotStockList,
   fetchSectorHeatmapData,
+  fetchSectorHeatBundle,
   // 龙虎榜相关
   fetchDragonTigerList,
   fetchDragonTigerDetail

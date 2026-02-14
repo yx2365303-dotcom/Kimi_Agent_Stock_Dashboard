@@ -1,17 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import useSWR from 'swr';
 import { cn, formatPercent } from '@/lib/utils';
 import { Card } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Flame, TrendingUp, TrendingDown, Zap, Loader2 } from 'lucide-react';
 import {
-  fetchIndustryHotList,
-  fetchConceptHotList,
-  fetchHotStockList,
-  fetchSectorHeatmapData,
-  fetchKplConcepts,
+  fetchSectorHeatBundle,
   type SectorHotData,
-  type HotStockData
+  type HotStockData,
 } from '@/services/stockService';
 
 // 开盘啦题材数据类型
@@ -27,52 +24,106 @@ interface KplConceptItem {
   total?: number;
 }
 
+function toFiniteNumber(value: unknown, fallback = 0): number {
+  const num = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(num) ? num : fallback;
+}
+
+function toConcepts(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim()).filter(Boolean);
+  }
+
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return [];
+
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) {
+        return parsed.map((item) => String(item).trim()).filter(Boolean);
+      }
+    } catch {
+      // ignore parse error and fallback to split
+    }
+
+    return text.split(/[，,]/).map((item) => item.trim()).filter(Boolean);
+  }
+
+  return [];
+}
+
 export function SectorHeat() {
   const [activeTab, setActiveTab] = useState('industry');
-  const [loading, setLoading] = useState(true);
+  const { data, isLoading } = useSWR(
+    'sector:heat:bundle',
+    () => fetchSectorHeatBundle(20),
+    {
+      dedupingInterval: 30_000,
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+    }
+  );
 
-  // 数据状态
-  const [heatmapData, setHeatmapData] = useState<{ name: string; value: number; size: number; type: string }[]>([]);
-  const [industryHotList, setIndustryHotList] = useState<SectorHotData[]>([]);
-  const [conceptHotList, setConceptHotList] = useState<SectorHotData[]>([]);
-  const [hotStockList, setHotStockList] = useState<HotStockData[]>([]);
-  const [kplConcepts, setKplConcepts] = useState<KplConceptItem[]>([]);
-
-  // 加载数据
-  useEffect(() => {
-    const loadData = async () => {
-      setLoading(true);
-      try {
-        const [heatmap, industry, concept, hotStock, kpl] = await Promise.all([
-          fetchSectorHeatmapData(20),
-          fetchIndustryHotList(30),  // 增加获取数量确保有足够涨跌数据
-          fetchConceptHotList(30),   // 增加获取数量确保有足够涨跌数据
-          fetchHotStockList(20),
-          fetchKplConcepts()
-        ]);
-
-        setHeatmapData(heatmap);
-        setIndustryHotList(industry);
-        setConceptHotList(concept);
-        setHotStockList(hotStock);
-        setKplConcepts(kpl);
-
-        console.log('板块热点数据加载完成:', {
-          heatmap: heatmap.length,
-          industry: industry.length,
-          concept: concept.length,
-          hotStock: hotStock.length,
-          kpl: kpl.length
-        });
-      } catch (error) {
-        console.error('加载板块热点数据失败:', error);
-      } finally {
-        setLoading(false);
-      }
+  const loading = isLoading && !data;
+  const heatmapData = (Array.isArray(data?.heatmapData) ? data.heatmapData : []).map((item, index) => {
+    const row = item as Record<string, unknown>;
+    return {
+      name: String(row.name ?? `板块${index + 1}`),
+      value: toFiniteNumber(row.value, 0),
+      size: Math.max(30, toFiniteNumber(row.size, 50)),
+      type: String(row.type ?? 'industry'),
     };
+  });
 
-    loadData();
-  }, []);
+  const industryHotList = (Array.isArray(data?.industryHotList) ? data.industryHotList : []).map((item, index) => {
+    const row = item as unknown as Record<string, unknown>;
+    return {
+      ts_code: String(row.ts_code ?? ''),
+      ts_name: String(row.ts_name ?? `行业${index + 1}`),
+      rank: toFiniteNumber(row.rank, index + 1),
+      pct_change: toFiniteNumber(row.pct_change, 0),
+      hot: toFiniteNumber(row.hot, 0),
+    } as SectorHotData;
+  });
+
+  const conceptHotList = (Array.isArray(data?.conceptHotList) ? data.conceptHotList : []).map((item, index) => {
+    const row = item as unknown as Record<string, unknown>;
+    return {
+      ts_code: String(row.ts_code ?? ''),
+      ts_name: String(row.ts_name ?? `概念${index + 1}`),
+      rank: toFiniteNumber(row.rank, index + 1),
+      pct_change: toFiniteNumber(row.pct_change, 0),
+      hot: toFiniteNumber(row.hot, 0),
+    } as SectorHotData;
+  });
+
+  const hotStockList = (Array.isArray(data?.hotStockList) ? data.hotStockList : []).map((item, index) => {
+    const row = item as unknown as Record<string, unknown>;
+    return {
+      ts_code: String(row.ts_code ?? ''),
+      ts_name: String(row.ts_name ?? `热股${index + 1}`),
+      rank: toFiniteNumber(row.rank, index + 1),
+      pct_change: toFiniteNumber(row.pct_change, 0),
+      hot: toFiniteNumber(row.hot, 0),
+      concepts: toConcepts(row.concepts),
+    } as HotStockData;
+  });
+
+  const kplConcepts = (Array.isArray(data?.kplConcepts) ? data.kplConcepts : []).map((item, index) => {
+    const row = item as unknown as Record<string, unknown>;
+    return {
+      ts_code: row.ts_code ? String(row.ts_code) : undefined,
+      name: String(row.name ?? `题材${index + 1}`),
+      limit_up_count: toFiniteNumber(row.limit_up_count, 0),
+      up_count: toFiniteNumber(row.up_count, 0),
+      trade_date: row.trade_date ? String(row.trade_date) : undefined,
+      heat_score: toFiniteNumber(row.heat_score, 0),
+      leading_stock: row.leading_stock ? String(row.leading_stock) : undefined,
+      leading_change: toFiniteNumber(row.leading_change, 0),
+      total: toFiniteNumber(row.total, 0),
+    } as KplConceptItem;
+  });
 
   const getHeatColor = (value: number) => {
     if (value >= 5) return 'bg-[#dc2626]';

@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import useSWR from 'swr';
 import { KLineChart } from '@/components/chart/KLineChart';
 import { TimeSeriesChart } from '@/components/chart/TimeSeriesChart';
 import { StockListTable } from '@/components/stock/StockListTable';
@@ -17,7 +18,7 @@ import {
   Newspaper,
   ArrowLeft
 } from 'lucide-react';
-import { fetchStockFullDetail, fetchKLineData, fetchStockMoneyFlow, fetchTimeSeriesData } from '@/services/stockService';
+import { fetchStockDetailBundle } from '@/services/stockService';
 
 // 格式化大数值（万元转为亿元等）
 function formatLargeNumber(value: number, unit: 'wan' | 'qianwan' = 'wan'): string {
@@ -128,51 +129,23 @@ function StockDetailView({
   stockCode: string;
   onBack: () => void;
 }) {
-  const [stockData, setStockData] = useState<StockDetailData | null>(null);
-  const [kLineData, setKLineData] = useState<KLineItem[]>([]);
-  const [timeSeriesData, setTimeSeriesData] = useState<TimeSeriesItem[]>([]);
-  const [moneyFlowData, setMoneyFlowData] = useState<MoneyFlowItem[]>([]);
   const [chartType, setChartType] = useState<'timeseries' | 'kline'>('timeseries');
-  const [loading, setLoading] = useState(true);
   const [isFavorited, setIsFavorited] = useState(false);
-
-  // 加载数据
-  useEffect(() => {
-    async function loadData() {
-      setLoading(true);
-      try {
-        // 先并行获取基础数据
-        const [detail, kline, moneyFlow] = await Promise.all([
-          fetchStockFullDetail(stockCode),
-          fetchKLineData(stockCode, 60),
-          fetchStockMoneyFlow(stockCode, 5),
-        ]);
-
-        if (detail) {
-          setStockData(detail as StockDetailData);
-        }
-        if (kline) {
-          setKLineData(kline);
-        }
-        if (moneyFlow) {
-          setMoneyFlowData(moneyFlow);
-        }
-
-        // 用 pre_close 获取分时数据（模拟数据会基于此价格生成）
-        const preClose = (detail as StockDetailData)?.pre_close || 0;
-        const timeSeries = await fetchTimeSeriesData(stockCode, preClose || undefined);
-        if (timeSeries) {
-          setTimeSeriesData(timeSeries);
-        }
-      } catch (error) {
-        console.error('加载股票数据失败:', error);
-      } finally {
-        setLoading(false);
-      }
+  const { data, isLoading } = useSWR(
+    ['stock:detail:bundle', stockCode],
+    () => fetchStockDetailBundle(stockCode),
+    {
+      dedupingInterval: 15_000,
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
     }
+  );
 
-    loadData();
-  }, [stockCode]);
+  const loading = isLoading && !data;
+  const stockData = (data?.detail || null) as StockDetailData | null;
+  const kLineData = (data?.kLineData || []) as KLineItem[];
+  const timeSeriesData = (data?.timeSeriesData || []) as TimeSeriesItem[];
+  const moneyFlowData = (data?.moneyFlowData || []) as MoneyFlowItem[];
 
   if (loading) {
     return (

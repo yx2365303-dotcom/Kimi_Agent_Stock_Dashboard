@@ -138,6 +138,13 @@ export const NEWS_TABLES = [
   'yuncaijing724_tb',        // 云财经
 ];
 
+export const FEATURED_NEWS_TABLES = [
+  'snowball_influencer_tb',
+  'weibo_influencer_tb',
+  'clscntelegraph_tb',
+  'eastmoney724_tb',
+];
+
 // 存储活跃的 Realtime 订阅通道
 const activeChannels: Map<string, RealtimeChannel> = new Map();
 
@@ -195,9 +202,16 @@ export function subscribeToNewsTable(
 export function subscribeToAllNewsTables(
   onInsert: (tableName: string, payload: { new: Record<string, unknown> }) => void
 ): () => void {
+  return subscribeToNewsTables(NEWS_TABLES, onInsert);
+}
+
+export function subscribeToNewsTables(
+  tableNames: string[],
+  onInsert: (tableName: string, payload: { new: Record<string, unknown> }) => void
+): () => void {
   const unsubscribeFns: Array<() => void> = [];
 
-  NEWS_TABLES.forEach((tableName) => {
+  tableNames.forEach((tableName) => {
     const unsubscribe = subscribeToNewsTable(tableName, (payload) => {
       onInsert(tableName, payload);
     });

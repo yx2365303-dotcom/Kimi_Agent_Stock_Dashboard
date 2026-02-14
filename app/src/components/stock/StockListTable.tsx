@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState } from 'react';
+import useSWR from 'swr';
 import { cn, formatNumber, getChangeColor } from '@/lib/utils';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -64,41 +65,36 @@ interface StockListTableProps {
 }
 
 export function StockListTable({ onSelectStock }: StockListTableProps) {
-  const [stocks, setStocks] = useState<StockQuoteItem[]>([]);
-  const [loading, setLoading] = useState(true);
   const [keyword, setKeyword] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
-  const [totalCount, setTotalCount] = useState(0);
   const [sortBy, setSortBy] = useState<SortField>('amount');
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
   
   const pageSize = 50;
-  const totalPages = Math.ceil(totalCount / pageSize);
+  const queryParams = {
+    keyword: keyword || undefined,
+    limit: pageSize,
+    offset: (currentPage - 1) * pageSize,
+    sortBy,
+    sortOrder
+  } as const;
 
-  // 加载数据
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const { data, total } = await fetchStockListWithQuotes({
-        keyword: keyword || undefined,
-        limit: pageSize,
-        offset: (currentPage - 1) * pageSize,
-        sortBy,
-        sortOrder
-      });
-      setStocks(data);
-      setTotalCount(total);
-    } catch (error) {
-      console.error('加载股票列表失败:', error);
-    } finally {
-      setLoading(false);
+  const { data, isLoading } = useSWR(
+    ['stock:list:quotes', queryParams],
+    () => fetchStockListWithQuotes(queryParams),
+    {
+      dedupingInterval: 10_000,
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+      keepPreviousData: true,
     }
-  }, [keyword, currentPage, sortBy, sortOrder]);
+  );
 
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+  const stocks = (data?.data || []) as StockQuoteItem[];
+  const totalCount = data?.total || 0;
+  const loading = isLoading && !data;
+  const totalPages = Math.ceil(totalCount / pageSize);
 
   // 搜索处理
   const handleSearch = () => {
@@ -124,7 +120,7 @@ export function StockListTable({ onSelectStock }: StockListTableProps) {
   };
 
   // 排序图标
-  const SortIcon = ({ field }: { field: SortField }) => {
+  const renderSortIcon = (field: SortField) => {
     if (sortBy !== field) {
       return <ArrowUpDown className="w-4 h-4 ml-1 text-slate-400" />;
     }
@@ -134,7 +130,7 @@ export function StockListTable({ onSelectStock }: StockListTableProps) {
   };
 
   // 分页组件
-  const Pagination = () => (
+  const renderPagination = () => (
     <div className="flex items-center justify-between px-4 py-3 border-t border-slate-200">
       <div className="text-sm text-slate-600">
         共 <span className="font-medium text-slate-900">{totalCount.toLocaleString()}</span> 只股票，
@@ -253,7 +249,7 @@ export function StockListTable({ onSelectStock }: StockListTableProps) {
               >
                 <div className="flex items-center justify-end">
                   涨跌幅
-                  <SortIcon field="pct_chg" />
+                  {renderSortIcon('pct_chg')}
                 </div>
               </TableHead>
               <TableHead className="w-24 text-right font-semibold text-slate-700">涨跌额</TableHead>
@@ -267,7 +263,7 @@ export function StockListTable({ onSelectStock }: StockListTableProps) {
               >
                 <div className="flex items-center justify-end">
                   成交额
-                  <SortIcon field="amount" />
+                  {renderSortIcon('amount')}
                 </div>
               </TableHead>
               <TableHead 
@@ -276,7 +272,7 @@ export function StockListTable({ onSelectStock }: StockListTableProps) {
               >
                 <div className="flex items-center justify-end">
                   换手率
-                  <SortIcon field="turnover_rate" />
+                  {renderSortIcon('turnover_rate')}
                 </div>
               </TableHead>
               <TableHead className="w-24 text-right font-semibold text-slate-700">市盈率</TableHead>
@@ -286,7 +282,7 @@ export function StockListTable({ onSelectStock }: StockListTableProps) {
               >
                 <div className="flex items-center justify-end">
                   总市值
-                  <SortIcon field="total_mv" />
+                  {renderSortIcon('total_mv')}
                 </div>
               </TableHead>
             </TableRow>
@@ -367,7 +363,7 @@ export function StockListTable({ onSelectStock }: StockListTableProps) {
       </div>
 
       {/* 分页 */}
-      {!loading && totalCount > 0 && <Pagination />}
+      {!loading && totalCount > 0 && renderPagination()}
     </Card>
   );
 }
