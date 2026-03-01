@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { cn } from '@/lib/utils';
 import { Wallet, TrendingUp, TrendingDown, Activity, ArrowUpRight, ArrowDownRight } from 'lucide-react';
 
@@ -9,7 +10,7 @@ interface CapitalActivityProps {
     className?: string;
 }
 
-export function CapitalActivity({
+export const CapitalActivity = memo(function CapitalActivity({
     totalAmount,
     amountChange,
     avgTurnover,
@@ -26,20 +27,20 @@ export function CapitalActivity({
     return (
         <div className={cn('p-4', className)}>
             {/* 标题 */}
-            <div className="text-sm font-medium text-slate-500 mb-3">资金活跃度</div>
+            <div className="text-sm font-medium text-muted-foreground mb-3">资金活跃度</div>
 
             {/* 主要指标 */}
             <div className="space-y-3">
                 {/* 成交额 */}
-                <div className="flex items-center justify-between p-2 rounded-lg bg-slate-50 hover:bg-slate-100 transition-colors">
+                <div className="flex items-center justify-between p-2 rounded-lg bg-muted hover:bg-muted transition-colors">
                     <div className="flex items-center gap-2">
                         <div className="w-8 h-8 rounded-lg bg-blue-500/10 flex items-center justify-center">
                             <Wallet className="w-4 h-4 text-blue-500" />
                         </div>
-                        <span className="text-sm text-slate-600">两市成交</span>
+                        <span className="text-sm text-muted-foreground">两市成交</span>
                     </div>
                     <div className="flex items-center gap-2">
-                        <span className="text-base font-bold font-mono text-slate-900">
+                        <span className="text-base font-bold font-mono text-foreground">
                             {formatAmount(totalAmount)}
                         </span>
                         {amountChange !== 0 && (
@@ -59,7 +60,7 @@ export function CapitalActivity({
                 </div>
 
                 {/* 北向资金 */}
-                <div className="flex items-center justify-between p-2 rounded-lg bg-slate-50 hover:bg-slate-100 transition-colors">
+                <div className="flex items-center justify-between p-2 rounded-lg bg-muted hover:bg-muted transition-colors">
                     <div className="flex items-center gap-2">
                         <div className={cn(
                             'w-8 h-8 rounded-lg flex items-center justify-center',
@@ -71,7 +72,7 @@ export function CapitalActivity({
                                 <TrendingDown className="w-4 h-4 text-green-500" />
                             )}
                         </div>
-                        <span className="text-sm text-slate-600">北向资金</span>
+                        <span className="text-sm text-muted-foreground">北向资金</span>
                     </div>
                     <div className="flex items-center gap-1">
                         <span className={cn(
@@ -84,18 +85,18 @@ export function CapitalActivity({
                 </div>
 
                 {/* 换手率 */}
-                <div className="flex items-center justify-between p-2 rounded-lg bg-slate-50 hover:bg-slate-100 transition-colors">
+                <div className="flex items-center justify-between p-2 rounded-lg bg-muted hover:bg-muted transition-colors">
                     <div className="flex items-center gap-2">
                         <div className="w-8 h-8 rounded-lg bg-purple-500/10 flex items-center justify-center">
                             <Activity className="w-4 h-4 text-purple-500" />
                         </div>
-                        <span className="text-sm text-slate-600">平均换手</span>
+                        <span className="text-sm text-muted-foreground">平均换手</span>
                     </div>
-                    <span className="text-base font-bold font-mono text-slate-900">
+                    <span className="text-base font-bold font-mono text-foreground">
                         {avgTurnover.toFixed(2)}%
                     </span>
                 </div>
             </div>
         </div>
     );
-}
+});

@@ -1,6 +1,20 @@
-import { supabaseStock, supabaseNews } from '@/lib/supabase';
-import type { IndexData, StockBasic, SectorData, LimitUpData, NewsItem, MarketSentiment, DailyData, MoneyFlowData } from '@/types';
-import { requestWithCache } from '@/lib/requestManager';
+import type { IndexData, StockBasic, SectorData, LimitUpData, MarketSentiment, DailyData, MoneyFlowData } from '@/types';
+import {
+  supabaseStock,
+  supabaseNews,
+  requestWithCache,
+  logger,
+  USE_MOCK_FALLBACK,
+  isRpcTemporarilyDisabled,
+  disableRpcTemporarily,
+  clearRpcDisableFlag,
+  shouldDisableRpcAfterError,
+  getRecentTradeDates,
+  stableStringify,
+  mapWithConcurrency,
+  fetchNewShareNames,
+  getFormattedUpdateTime,
+} from './serviceUtils';
 import {
   mockIndices,
   mockUpDownDistribution,
@@ -10,184 +24,14 @@ import {
   mockSectors,
   mockKplConcepts,
   mockHsgtTop10,
-  mockNews,
   mockStocks,
   generateKLineData,
   generateTimeSeriesData
 } from '@/data/mock';
 
-// 是否使用模拟数据（当Supabase未配置或出错时自动降级）
-const USE_MOCK_FALLBACK = true;
-
-const RPC_DISABLE_KEY_PREFIX = 'alphapulse:rpc:disable:';
-const RPC_DISABLE_MS = 30 * 60 * 1000;
-
-function getRpcDisableKey(rpcName: string): string {
-  return `${RPC_DISABLE_KEY_PREFIX}${rpcName}`;
-}
-
-function getRpcDisabledUntil(rpcName: string): number {
-  if (typeof window === 'undefined') return 0;
-
-  const raw = window.localStorage.getItem(getRpcDisableKey(rpcName));
-  if (!raw) return 0;
-  const until = Number(raw);
-  return Number.isFinite(until) ? until : 0;
-}
-
-function isRpcTemporarilyDisabled(rpcName: string): boolean {
-  return Date.now() < getRpcDisabledUntil(rpcName);
-}
-
-function disableRpcTemporarily(rpcName: string): void {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(getRpcDisableKey(rpcName), String(Date.now() + RPC_DISABLE_MS));
-}
-
-function clearRpcDisableFlag(rpcName: string): void {
-  if (typeof window === 'undefined') return;
-  window.localStorage.removeItem(getRpcDisableKey(rpcName));
-}
-
-function shouldDisableRpcAfterError(error: unknown): boolean {
-  const text = (
-    typeof error === 'string'
-      ? error
-      : JSON.stringify(error)
-  ).toLowerCase();
-
-  return (
-    text.includes('pgrst202') ||
-    text.includes('42883') ||
-    text.includes('42p01') ||
-    text.includes('42501') ||
-    text.includes('could not find the function') ||
-    text.includes('function') && text.includes('does not exist') ||
-    text.includes('relation') && text.includes('does not exist') ||
-    text.includes('permission denied')
-  );
-}
-
 // ===========================================
-// 实际数据库表结构（基于检查结果）
+// 接口定义
 // ===========================================
-// stock_basic: ts_code, symbol, name, area, industry, cnspell, market, list_date, act_name, act_ent_type
-// daily_basic: ts_code, trade_date, close, turnover_rate, volume_ratio, pe, pe_ttm, pb, total_mv, circ_mv
-// index_daily: ts_code, trade_date, open, high, low, close, pre_close, change, pct_chg, vol, amount
-// index_basic: ts_code, name, fullname, market, publisher, index_type, category
-// moneyflow: ts_code, trade_date, buy_sm_vol, buy_sm_amount, sell_sm_vol, sell_sm_amount, etc.
-// hsgt_top10: trade_date, ts_code, name, close, change, rank, market_type, amount, net_amount
-// stk_limit: trade_date, ts_code, up_limit, down_limit
-// ths_index: ts_code, name, count, exchange, list_date, type (板块基础信息)
-// ths_daily: ts_code, trade_date, open, high, low, close, pct_change, vol (板块日线)
-// ths_member: ts_code, con_code, con_name (板块成分股)
-// kpl_concept: trade_date, ts_code, name, z_t_num, up_num
-// kpl_list: ts_code, name, trade_date, lu_time, theme, pct_chg, etc.
-// limit_list_d: trade_date, ts_code, industry, name, close, pct_chg, amount, limit_amount, float_mv, total_mv, 
-//               turnover_ratio, fd_amount, first_time, last_time, open_times, up_stat, limit_times, limit
-
-// ===========================================
-// 工具函数
-// ===========================================
-
-/**
- * 获取最近的交易日期（YYYYMMDD格式）
- * 使用北京时间，用于查询最新数据
- */
-function getRecentTradeDates(count = 5): string[] {
-  const dates: string[] = [];
-  // 使用北京时间 (UTC+8)
-  const now = new Date();
-  const beijingOffset = 8 * 60 * 60 * 1000; // 8小时的毫秒数
-  const beijingNow = new Date(now.getTime() + beijingOffset + now.getTimezoneOffset() * 60 * 1000);
-
-  for (let i = 0; i < count + 10 && dates.length < count; i++) {
-    const d = new Date(beijingNow);
-    d.setDate(d.getDate() - i);
-    const day = d.getDay();
-    // 跳过周末
-    if (day !== 0 && day !== 6) {
-      const year = d.getFullYear();
-      const month = String(d.getMonth() + 1).padStart(2, '0');
-      const date = String(d.getDate()).padStart(2, '0');
-      dates.push(`${year}${month}${date}`);
-    }
-  }
-
-  console.log('生成的交易日期:', dates);
-  return dates;
-}
-
-function stableStringify(value: unknown): string {
-  if (value === null || value === undefined) return String(value);
-  if (typeof value !== 'object') return String(value);
-
-  if (Array.isArray(value)) {
-    return `[${value.map(stableStringify).join(',')}]`;
-  }
-
-  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
-  return `{${entries.map(([k, v]) => `${k}:${stableStringify(v)}`).join(',')}}`;
-}
-
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  mapper: (item: T) => Promise<R>
-): Promise<R[]> {
-  if (items.length === 0) return [];
-
-  const results: R[] = new Array(items.length);
-  let currentIndex = 0;
-
-  const worker = async () => {
-    while (currentIndex < items.length) {
-      const itemIndex = currentIndex;
-      currentIndex += 1;
-      results[itemIndex] = await mapper(items[itemIndex]);
-    }
-  };
-
-  const workerCount = Math.min(Math.max(concurrency, 1), items.length);
-  await Promise.all(Array.from({ length: workerCount }, () => worker()));
-  return results;
-}
-
-/**
- * 从 new_share 表批量获取新股名称
- * 用于降级获取 stock_basic 表中没有的新上市股票名称
- */
-async function fetchNewShareNames(tsCodes: string[]): Promise<Map<string, { name: string; industry: string }>> {
-  const nameMap = new Map<string, { name: string; industry: string }>();
-
-  if (tsCodes.length === 0) return nameMap;
-
-  try {
-    const { data, error } = await supabaseStock
-      .from('new_share')
-      .select('ts_code, name')
-      .in('ts_code', tsCodes);
-
-    if (error) {
-      console.warn('从 new_share 表获取新股名称失败:', error);
-      return nameMap;
-    }
-
-    if (data && data.length > 0) {
-      data.forEach((item: { ts_code: string; name: string }) => {
-        nameMap.set(item.ts_code, {
-          name: item.name,
-          industry: '新股'
-        });
-      });
-      console.log(`从 new_share 表获取到 ${data.length} 只新股的名称`);
-    }
-  } catch (error) {
-    console.error('批量获取新股名称失败:', error);
-  }
-
-  return nameMap;
-}
 
 export interface NorthFlowPayload {
   net_inflow: number;
@@ -290,7 +134,7 @@ export async function fetchIndices(): Promise<IndexData[]> {
       .in('ts_code', targetCodes);
 
     if (basicError) {
-      console.warn('获取指数基础信息失败:', basicError);
+      logger.warn('获取指数基础信息失败:', basicError);
     }
 
     const nameMap = new Map<string, string>();
@@ -303,13 +147,13 @@ export async function fetchIndices(): Promise<IndexData[]> {
     // 直接查询最新的指数日线数据（按日期降序，取每个指数的最新一条）
     const { data, error } = await supabaseStock
       .from('index_daily')
-      .select('*')
+      .select('ts_code, trade_date, close, open, change, pct_chg, vol, amount, high, low, pre_close')
       .in('ts_code', targetCodes)
       .order('trade_date', { ascending: false })
       .limit(20); // 获取足够多的数据以确保每个指数都有
 
     if (error) {
-      console.warn('查询指数日线数据失败:', error);
+      logger.warn('查询指数日线数据失败:', error);
       if (USE_MOCK_FALLBACK) return mockIndices;
       return [];
     }
@@ -337,7 +181,7 @@ export async function fetchIndices(): Promise<IndexData[]> {
         }
       });
 
-      console.log(`获取到 ${latestByCode.size} 个指数的最新数据，日期: ${typedData[0].trade_date}`);
+      logger.log(`获取到 ${latestByCode.size} 个指数的最新数据，日期: ${typedData[0].trade_date}`);
 
       return Array.from(latestByCode.values()).map((item: {
         ts_code: string;
@@ -365,11 +209,11 @@ export async function fetchIndices(): Promise<IndexData[]> {
       }));
     }
 
-    console.warn('未找到指数日线数据，使用模拟数据');
+    logger.warn('未找到指数日线数据，使用模拟数据');
     if (USE_MOCK_FALLBACK) return mockIndices;
     return [];
   } catch (error) {
-    console.error('获取指数数据失败:', error);
+    logger.error('获取指数数据失败:', error);
     if (USE_MOCK_FALLBACK) return mockIndices;
     return [];
   }
@@ -402,13 +246,13 @@ export async function fetchHotSectors(limit = 10): Promise<SectorData[]> {
       .limit(200);
 
     if (upError || downError) {
-      console.warn('查询板块日线失败:', upError || downError);
+      logger.warn('查询板块日线失败:', upError || downError);
       if (USE_MOCK_FALLBACK) return mockSectors.slice(0, limit);
       return [];
     }
 
     if ((!upData || upData.length === 0) && (!downData || downData.length === 0)) {
-      console.warn('未找到板块日线数据，使用模拟数据');
+      logger.warn('未找到板块日线数据，使用模拟数据');
       if (USE_MOCK_FALLBACK) return mockSectors.slice(0, limit);
       return [];
     }
@@ -431,7 +275,7 @@ export async function fetchHotSectors(limit = 10): Promise<SectorData[]> {
         return true;
       });
 
-    console.log(`板块数据: 涨幅 ${typedUpData.filter(d => d.trade_date === latestDate).length} 条, 跌幅 ${typedDownData.filter(d => d.trade_date === latestDate).length} 条, 去重后 ${latestData.length} 条`);
+    logger.log(`板块数据: 涨幅 ${typedUpData.filter(d => d.trade_date === latestDate).length} 条, 跌幅 ${typedDownData.filter(d => d.trade_date === latestDate).length} 条, 去重后 ${latestData.length} 条`);
 
     // 只查询这些板块的基础信息
     const tsCodes = latestData.map(item => item.ts_code);
@@ -441,7 +285,7 @@ export async function fetchHotSectors(limit = 10): Promise<SectorData[]> {
       .in('ts_code', tsCodes);
 
     if (basicError) {
-      console.warn('获取板块基础信息失败:', basicError);
+      logger.warn('获取板块基础信息失败:', basicError);
     }
 
     const basicMap = new Map<string, { name: string; count: number; type: string }>();
@@ -504,8 +348,8 @@ export async function fetchHotSectors(limit = 10): Promise<SectorData[]> {
       });
     }
 
-    console.log(`使用交易日 ${latestDate} 的板块数据`);
-    console.log(`板块数据匹配: ${latestData.length} 个板块, ${basicMap.size} 个基础信息, ${conceptLimitUpMap.size} 个涨停概念, ${industryLimitDownMap.size} 个跌停行业`);
+    logger.log(`使用交易日 ${latestDate} 的板块数据`);
+    logger.log(`板块数据匹配: ${latestData.length} 个板块, ${basicMap.size} 个基础信息, ${conceptLimitUpMap.size} 个涨停概念, ${industryLimitDownMap.size} 个跌停行业`);
 
     // 辅助函数：尝试匹配板块名称到概念（涨停）
     const matchLimitUp = (sectorName: string): number => {
@@ -567,7 +411,7 @@ export async function fetchHotSectors(limit = 10): Promise<SectorData[]> {
       };
     });
   } catch (error) {
-    console.error('获取板块数据失败:', error);
+    logger.error('获取板块数据失败:', error);
     if (USE_MOCK_FALLBACK) return mockSectors.slice(0, limit);
     return [];
   }
@@ -597,7 +441,7 @@ export async function fetchAllSectors(sectorType?: 'industry' | 'concept' | 'reg
     const { data: basicData, error: basicError } = await query;
 
     if (basicError) {
-      console.warn('获取所有板块失败:', basicError);
+      logger.warn('获取所有板块失败:', basicError);
       if (USE_MOCK_FALLBACK) return mockSectors;
       return [];
     }
@@ -656,7 +500,7 @@ export async function fetchAllSectors(sectorType?: 'industry' | 'concept' | 'reg
       heat_score: 50
     }));
   } catch (error) {
-    console.error('获取所有板块数据失败:', error);
+    logger.error('获取所有板块数据失败:', error);
     if (USE_MOCK_FALLBACK) return mockSectors;
     return [];
   }
@@ -674,14 +518,14 @@ export async function fetchLimitUpList(limit = 20): Promise<LimitUpData[]> {
     // 直接查询最新的涨停数据
     const { data, error } = await supabaseStock
       .from('limit_list_d')
-      .select('*')
+      .select('ts_code, name, trade_date, close, pct_chg, limit_amount, first_time, last_time, open_times, limit_times, industry')
       .eq('limit', 'U')
       .order('trade_date', { ascending: false })
       .order('first_time')
       .limit(100); // 获取足够多的数据
 
     if (error) {
-      console.warn('查询涨停数据失败:', error);
+      logger.warn('查询涨停数据失败:', error);
       if (USE_MOCK_FALLBACK) return mockLimitUpList.slice(0, limit);
       return [];
     }
@@ -705,7 +549,7 @@ export async function fetchLimitUpList(limit = 20): Promise<LimitUpData[]> {
       const latestDate = typedData[0].trade_date;
       const latestData = typedData.filter(item => item.trade_date === latestDate).slice(0, limit);
 
-      console.log(`使用交易日 ${latestDate} 的涨停数据，共 ${latestData.length} 条`);
+      logger.log(`使用交易日 ${latestDate} 的涨停数据，共 ${latestData.length} 条`);
       return latestData.map((item: {
         ts_code: string;
         name: string;
@@ -734,11 +578,11 @@ export async function fetchLimitUpList(limit = 20): Promise<LimitUpData[]> {
       }));
     }
 
-    console.warn('未找到涨停数据，使用模拟数据');
+    logger.warn('未找到涨停数据，使用模拟数据');
     if (USE_MOCK_FALLBACK) return mockLimitUpList.slice(0, limit);
     return [];
   } catch (error) {
-    console.error('获取涨停数据失败:', error);
+    logger.error('获取涨停数据失败:', error);
     if (USE_MOCK_FALLBACK) return mockLimitUpList.slice(0, limit);
     return [];
   }
@@ -752,14 +596,14 @@ export async function fetchLimitDownList(limit = 20): Promise<LimitUpData[]> {
     // 直接查询最新的跌停数据
     const { data, error } = await supabaseStock
       .from('limit_list_d')
-      .select('*')
+      .select('ts_code, name, trade_date, close, pct_chg, limit_amount, first_time, last_time, open_times, limit_times, industry')
       .eq('limit', 'D')
       .order('trade_date', { ascending: false })
       .order('first_time')
       .limit(100);
 
     if (error) {
-      console.warn('查询跌停数据失败:', error);
+      logger.warn('查询跌停数据失败:', error);
       return [];
     }
 
@@ -781,7 +625,7 @@ export async function fetchLimitDownList(limit = 20): Promise<LimitUpData[]> {
       const latestDate = typedData[0].trade_date;
       const latestData = typedData.filter(item => item.trade_date === latestDate).slice(0, limit);
 
-      console.log(`使用交易日 ${latestDate} 的跌停数据`);
+      logger.log(`使用交易日 ${latestDate} 的跌停数据`);
       return latestData.map((item: {
         ts_code: string;
         name: string;
@@ -812,7 +656,7 @@ export async function fetchLimitDownList(limit = 20): Promise<LimitUpData[]> {
 
     return [];
   } catch (error) {
-    console.error('获取跌停数据失败:', error);
+    logger.error('获取跌停数据失败:', error);
     return [];
   }
 }
@@ -823,11 +667,46 @@ export async function fetchLimitDownList(limit = 20): Promise<LimitUpData[]> {
 
 /**
  * 获取涨跌分布数据（增强版）
- * 包含：连板分布、炸板统计、行业热度
+ * 优先走 RPC get_up_down_distribution（数据库端聚合），失败时降级前端聚合
  */
 export async function fetchUpDownDistribution(): Promise<UpDownDistributionPayload | null> {
   try {
-    // 先获取 limit_list_d 表的最新日期
+    // 优先尝试 RPC（数据库侧聚合，仅返回一行聚合结果，避免 5000+ 行全量传输）
+    const rpcName = 'get_up_down_distribution';
+    if (!isRpcTemporarilyDisabled(rpcName)) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: rpcData, error: rpcError } = await (supabaseStock as any).rpc(rpcName);
+        if (!rpcError && rpcData) {
+          clearRpcDisableFlag(rpcName);
+          const payload = typeof rpcData === 'string' ? JSON.parse(rpcData) : rpcData;
+          return {
+            up_count: payload.up_count || 0,
+            down_count: payload.down_count || 0,
+            flat_count: payload.flat_count || 0,
+            limit_up: payload.limit_up || 0,
+            limit_down: payload.limit_down || 0,
+            distribution: Array.isArray(payload.distribution) ? payload.distribution : [],
+            lianbanStats: payload.lianbanStats || { oneBoard: 0, twoBoard: 0, threeBoard: 0, fourBoard: 0, fivePlus: 0 },
+            zhabanCount: payload.zhabanCount || 0,
+            fengbanRate: payload.fengbanRate || 0,
+            topIndustries: Array.isArray(payload.topIndustries) ? payload.topIndustries : [],
+            maxLianban: payload.maxLianban || 0,
+            totalAttempts: payload.totalAttempts || 0
+          };
+        }
+        if (rpcError && shouldDisableRpcAfterError(rpcError)) {
+          disableRpcTemporarily(rpcName);
+        }
+      } catch (rpcErr) {
+        if (shouldDisableRpcAfterError(rpcErr)) {
+          disableRpcTemporarily(rpcName);
+        }
+        logger.warn('RPC get_up_down_distribution 调用失败，降级前端聚合:', rpcErr);
+      }
+    }
+
+    // 降级：前端聚合（原逻辑）
     const { data: latestData } = await supabaseStock
       .from('limit_list_d')
       .select('trade_date')
@@ -841,7 +720,6 @@ export async function fetchUpDownDistribution(): Promise<UpDownDistributionPaylo
 
     const latestDate = (latestData as { trade_date: string }[])[0].trade_date;
 
-    // 从 daily 表获取真实的涨跌平统计
     const { data: dailyLatest } = await supabaseStock
       .from('daily')
       .select('trade_date')
@@ -850,18 +728,15 @@ export async function fetchUpDownDistribution(): Promise<UpDownDistributionPaylo
 
     const dailyDate = (dailyLatest as { trade_date: string }[] | null)?.[0]?.trade_date || latestDate;
 
-    // 获取所有股票的涨跌幅数据用于统计
     const { data: allDailyData } = await supabaseStock
       .from('daily')
       .select('pct_chg')
       .eq('trade_date', dailyDate);
 
-    // 统计涨跌平
     let up_count = 0;
     let down_count = 0;
     let flat_count = 0;
 
-    // 涨跌幅区间分布
     const distribution = [
       { range: '涨停', count: 0, color: '#ef4444' },
       { range: '7-10%', count: 0, color: '#f87171' },
@@ -881,13 +756,10 @@ export async function fetchUpDownDistribution(): Promise<UpDownDistributionPaylo
     if (allDailyData && allDailyData.length > 0) {
       allDailyData.forEach((item: { pct_chg: number }) => {
         const pct = item.pct_chg || 0;
-
-        // 涨跌平统计
         if (pct > 0) up_count++;
         else if (pct < 0) down_count++;
         else flat_count++;
 
-        // 涨跌幅区间分布
         if (pct >= 9.9) distribution[0].count++;
         else if (pct >= 7) distribution[1].count++;
         else if (pct >= 5) distribution[2].count++;
@@ -902,30 +774,18 @@ export async function fetchUpDownDistribution(): Promise<UpDownDistributionPaylo
         else if (pct > -9.9) distribution[11].count++;
         else distribution[12].count++;
       });
-
-      console.log(`从 daily 表统计: 涨=${up_count}, 跌=${down_count}, 平=${flat_count}, 总计=${allDailyData.length}`);
     }
 
-    // 获取所有涨跌停数据（一次查询，JS中过滤，避免 Supabase eq 过滤问题）
     const { data: allLimitData } = await supabaseStock
       .from('limit_list_d')
       .select('ts_code, name, limit_times, open_times, industry, limit_amount, first_time, limit')
       .eq('trade_date', latestDate);
 
-    // 在 JS 中按 limit 字段过滤
     const limitUpList = (allLimitData || []).filter((d: { limit: string }) => d.limit === 'U');
     const limitDownList = (allLimitData || []).filter((d: { limit: string }) => d.limit === 'D');
     const zhabanList = (allLimitData || []).filter((d: { limit: string }) => d.limit === 'Z');
 
-    // 统计连板分布
-    const lianbanStats = {
-      oneBoard: 0,  // 一板（首板）
-      twoBoard: 0,  // 二板
-      threeBoard: 0, // 三板
-      fourBoard: 0,  // 四板
-      fivePlus: 0    // 五板及以上
-    };
-
+    const lianbanStats = { oneBoard: 0, twoBoard: 0, threeBoard: 0, fourBoard: 0, fivePlus: 0 };
     limitUpList.forEach((item: { limit_times: number }) => {
       const times = item.limit_times || 1;
       if (times === 1) lianbanStats.oneBoard++;
@@ -935,46 +795,31 @@ export async function fetchUpDownDistribution(): Promise<UpDownDistributionPaylo
       else lianbanStats.fivePlus++;
     });
 
-    // 统计炸板率（有开板的视为炸板）
     const totalAttempts = limitUpList.length + zhabanList.length;
     const zhabanCount = zhabanList.length;
     const fengbanRate = totalAttempts > 0 ? ((totalAttempts - zhabanCount) / totalAttempts * 100) : 0;
 
-    // 统计涨停行业分布
     const industryMap = new Map<string, number>();
     limitUpList.forEach((item: { industry: string }) => {
       const industry = item.industry || '其他';
       industryMap.set(industry, (industryMap.get(industry) || 0) + 1);
     });
 
-    // 获取TOP3行业
     const topIndustries = Array.from(industryMap.entries())
       .sort((a, b) => b[1] - a[1])
       .slice(0, 3)
       .map(([name, count]) => ({ name, count }));
 
-    // 计算最高连板
     const maxLianban = Math.max(...limitUpList.map((item: { limit_times: number }) => item.limit_times || 1), 0);
 
-    console.log(`使用交易日 ${latestDate} 的涨跌停统计: 涨停=${limitUpList.length}, 跌停=${limitDownList.length}, 炸板=${zhabanCount}`);
-
     return {
-      up_count,
-      down_count,
-      flat_count,
-      limit_up: limitUpList.length,
-      limit_down: limitDownList.length,
-      distribution,
-      // 新增数据
-      lianbanStats,
-      zhabanCount,
-      fengbanRate,
-      topIndustries,
-      maxLianban,
-      totalAttempts
+      up_count, down_count, flat_count,
+      limit_up: limitUpList.length, limit_down: limitDownList.length,
+      distribution, lianbanStats, zhabanCount, fengbanRate,
+      topIndustries, maxLianban, totalAttempts
     };
   } catch (error) {
-    console.error('获取涨跌分布失败:', error);
+    logger.error('获取涨跌分布失败:', error);
     if (USE_MOCK_FALLBACK) return mockUpDownDistribution;
     return null;
   }
@@ -1113,25 +958,56 @@ export async function fetchEnhancedSentiment(params?: {
 
     const sentiment = buildEnhancedSentiment(distribution as UpDownDistributionPayload | null, northFlowData as NorthFlowPayload | null, dailyAmountData);
     if (!sentiment) {
-      console.warn('无法获取涨跌分布数据');
+      logger.warn('无法获取涨跌分布数据');
       return null;
     }
 
     return sentiment;
   } catch (error) {
-    console.error('获取增强版市场情绪失败:', error);
+    logger.error('获取增强版市场情绪失败:', error);
     return null;
   }
 }
 
 /**
  * 获取每日成交额统计
+ * 优先走 RPC get_daily_total_amount（数据库端 SUM/AVG），失败时降级前端聚合
  */
 async function fetchDailyTotalAmount(signal?: AbortSignal): Promise<{ totalAmount: number; amountChange: number; avgTurnover: number } | null> {
   try {
+    // 优先尝试 RPC（数据库侧聚合，避免传输约 10000 行 amount 数据）
+    const rpcName = 'get_daily_total_amount';
+    if (!isRpcTemporarilyDisabled(rpcName)) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let rpcQuery = (supabaseStock as any).rpc(rpcName);
+        if (signal && typeof rpcQuery?.abortSignal === 'function') {
+          rpcQuery = rpcQuery.abortSignal(signal);
+        }
+        const { data: rpcData, error: rpcError } = await rpcQuery;
+        if (!rpcError && rpcData) {
+          clearRpcDisableFlag(rpcName);
+          const payload = typeof rpcData === 'string' ? JSON.parse(rpcData) : rpcData;
+          return {
+            totalAmount: Number(payload.totalAmount) || 0,
+            amountChange: Number(payload.amountChange) || 0,
+            avgTurnover: Number(payload.avgTurnover) || 0
+          };
+        }
+        if (rpcError && shouldDisableRpcAfterError(rpcError)) {
+          disableRpcTemporarily(rpcName);
+        }
+      } catch (rpcErr) {
+        if (shouldDisableRpcAfterError(rpcErr)) {
+          disableRpcTemporarily(rpcName);
+        }
+        logger.warn('RPC get_daily_total_amount 调用失败，降级前端聚合:', rpcErr);
+      }
+    }
+
+    // 降级：前端聚合（原逻辑）
     const requestSignal = signal ?? new AbortController().signal;
 
-    // 获取最近两个交易日的数据
     const { data: latestDates } = await supabaseStock
       .from('daily')
       .select('trade_date')
@@ -1143,7 +1019,6 @@ async function fetchDailyTotalAmount(signal?: AbortSignal): Promise<{ totalAmoun
 
     const latestDate = (latestDates as { trade_date: string }[])[0].trade_date;
 
-    // 获取当日成交额总和
     const { data: todayData } = await supabaseStock
       .from('daily')
       .select('amount')
@@ -1151,10 +1026,9 @@ async function fetchDailyTotalAmount(signal?: AbortSignal): Promise<{ totalAmoun
       .eq('trade_date', latestDate);
 
     const totalAmount = todayData
-      ? (todayData as { amount: number }[]).reduce((sum, item) => sum + (item.amount || 0), 0) / 100000000 // 转为亿
+      ? (todayData as { amount: number }[]).reduce((sum, item) => sum + (item.amount || 0), 0) / 100000000
       : 0;
 
-    // 获取前一日的交易日期
     const prevDate = getPreviousTradingDate(latestDate);
     const { data: prevData } = await supabaseStock
       .from('daily')
@@ -1168,7 +1042,6 @@ async function fetchDailyTotalAmount(signal?: AbortSignal): Promise<{ totalAmoun
 
     const amountChange = prevAmount > 0 ? ((totalAmount - prevAmount) / prevAmount) * 100 : 0;
 
-    // 平均换手率（从 daily_basic 表获取）
     let avgTurnover = 0;
     try {
       const { data: turnoverData, error: turnoverError } = await supabaseStock
@@ -1177,7 +1050,7 @@ async function fetchDailyTotalAmount(signal?: AbortSignal): Promise<{ totalAmoun
         .abortSignal(requestSignal)
         .eq('trade_date', latestDate)
         .not('turnover_rate', 'is', null)
-        .limit(1000); // 限制数量避免数据过多
+        .limit(1000);
 
       if (!turnoverError && turnoverData && turnoverData.length > 0) {
         const validData = (turnoverData as { turnover_rate: number }[]).filter(item => item.turnover_rate > 0);
@@ -1186,12 +1059,12 @@ async function fetchDailyTotalAmount(signal?: AbortSignal): Promise<{ totalAmoun
         }
       }
     } catch (err) {
-      console.warn('获取平均换手率失败:', err);
+      logger.warn('获取平均换手率失败:', err);
     }
 
     return { totalAmount, amountChange, avgTurnover };
   } catch (error) {
-    console.error('获取成交额统计失败:', error);
+    logger.error('获取成交额统计失败:', error);
     return null;
   }
 }
@@ -1240,7 +1113,7 @@ export async function fetchMarketSentiment(): Promise<MarketSentiment | null> {
     if (USE_MOCK_FALLBACK) return mockSentiment;
     return null;
   } catch (error) {
-    console.error('获取市场情绪失败:', error);
+    logger.error('获取市场情绪失败:', error);
     if (USE_MOCK_FALLBACK) return mockSentiment;
     return null;
   }
@@ -1263,7 +1136,7 @@ export async function fetchNorthFlow(days = 30): Promise<NorthFlowPayload | null
       .limit(days);
 
     if (error) {
-      console.warn('获取北向资金数据失败:', error);
+      logger.warn('获取北向资金数据失败:', error);
       if (USE_MOCK_FALLBACK) return mockNorthFlow;
       return null;
     }
@@ -1277,7 +1150,7 @@ export async function fetchNorthFlow(days = 30): Promise<NorthFlowPayload | null
         south_money: string;
       };
       const typedData = data as MoneyflowHsgtRow[];
-      console.log(`获取到 ${typedData.length} 条北向资金数据，最新日期: ${typedData[0].trade_date}`);
+      logger.log(`获取到 ${typedData.length} 条北向资金数据，最新日期: ${typedData[0].trade_date}`);
 
       // 数据是按日期降序的，需要反转为升序用于图表显示
       const sortedData = [...typedData].reverse();
@@ -1335,71 +1208,13 @@ export async function fetchNorthFlow(days = 30): Promise<NorthFlowPayload | null
     if (USE_MOCK_FALLBACK) return mockNorthFlow;
     return null;
   } catch (error) {
-    console.error('获取北向资金失败:', error);
+    logger.error('获取北向资金失败:', error);
     if (USE_MOCK_FALLBACK) return mockNorthFlow;
     return null;
   }
 }
 
 // ===========================================
-// 新闻资讯服务 (使用财经资讯数据库)
-// ===========================================
-
-/**
- * 获取新闻列表
- * 注意：财经资讯数据库可能没有标准的 news 表
- * 需要根据实际表结构调整
- */
-export async function fetchNews(params: {
-  category?: string;
-  importance?: 'high' | 'normal' | 'low';
-  limit?: number;
-} = {}): Promise<NewsItem[]> {
-  try {
-    const { limit = 20 } = params;
-
-    // 尝试查询可能存在的新闻表
-    const possibleTables = ['news', 'news_list', 'articles', 'cctv_news', 'major_news'];
-
-    for (const tableName of possibleTables) {
-      try {
-        const query = supabaseNews
-          .from(tableName)
-          .select('*')
-          .limit(limit);
-
-        const { data, error } = await query;
-
-        if (!error && data && data.length > 0) {
-          console.log(`从 ${tableName} 表获取到新闻数据`);
-          // 根据实际字段映射
-          return data.map((item: Record<string, unknown>, index: number) => ({
-            id: (item.id as string) || String(index),
-            title: (item.title as string) || (item.headline as string) || '',
-            content: (item.content as string) || (item.summary as string) || '',
-            source: (item.source as string) || '',
-            publish_time: (item.publish_time as string) || (item.created_at as string) || new Date().toISOString(),
-            importance: (item.importance as 'high' | 'normal' | 'low') || 'normal',
-            related_stocks: (item.related_stocks as string[]) || [],
-            category: (item.category as string) || ''
-          }));
-        }
-      } catch {
-        // 表不存在，继续尝试下一个
-        continue;
-      }
-    }
-
-    console.warn('未找到新闻表，使用模拟数据');
-    if (USE_MOCK_FALLBACK) return mockNews.slice(0, limit);
-    return [];
-  } catch (error) {
-    console.error('获取新闻失败:', error);
-    if (USE_MOCK_FALLBACK) return mockNews.slice(0, params.limit || 20);
-    return [];
-  }
-}
-
 // ===========================================
 // 实时新闻聚合服务
 // ===========================================
@@ -1424,7 +1239,6 @@ export const NEWS_SOURCES = [
   { key: 'futunn', name: '富途牛牛', tableName: 'futunn724_tb', color: '#00B894' },
   { key: 'ifeng', name: '凤凰财经', tableName: 'ifeng724_tb', color: '#E17055' },
   { key: 'jin10qihuo', name: '金十期货', tableName: 'jin10qihuo724_tb', color: '#FDCB6E' },
-  { key: 'chinastar', name: '科创板日报', tableName: 'chinastarmarkettelegraph_tb', color: '#6C5CE7' },
 
   // 其他平台
   { key: 'snowball', name: '雪球', tableName: 'snowball724_tb', color: '#3B82F6' },
@@ -1434,53 +1248,17 @@ export const NEWS_SOURCES = [
   { key: 'yuncaijing', name: '云财经', tableName: 'yuncaijing724_tb', color: '#00BCD4' },
 ];
 
-/**
- * 格式化 Unix 时间戳为时间字符串
- */
-function formatNewsTime(timestamp: number): { time: string; date: string } {
-  const d = new Date(timestamp * 1000);
-  const hours = String(d.getHours()).padStart(2, '0');
-  const minutes = String(d.getMinutes()).padStart(2, '0');
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return {
-    time: `${hours}:${minutes}`,
-    date: `${month}-${day}`
-  };
-}
+/** 新闻数据行类型 */
+type NewsRow = {
+  id: string | number;
+  title: string;
+  content: string;
+  display_time: number;
+  images: unknown; // jsonb 可能是字符串或已解析的数组
+};
 
-/**
- * 判断新闻重要性
- * 基于关键词匹配
- */
-function getNewsImportance(title: string, content: string): 'high' | 'normal' {
-  const importantKeywords = [
-    '央行', '降准', '降息', '利率', 'LPR', '国务院', '证监会', '银保监',
-    '重磅', '突发', '重要', '紧急', '官宣', '发布会',
-    '涨停', '跌停', '暴涨', '暴跌', '暴跌', '大涨', '大跌',
-    '特朗普', '美联储', 'Fed', '鲍威尔', 'GDP', 'CPI', 'PPI', 'PMI',
-    '战争', '制裁', '关税', '贸易战',
-    '茅台', '比亚迪', '宁德时代', '华为', '特斯拉', '英伟达', '苹果',
-  ];
-
-  const text = (title + content).toLowerCase();
-  return importantKeywords.some(keyword => text.includes(keyword.toLowerCase())) ? 'high' : 'normal';
-}
-
-/**
- * 从单个新闻源获取数据
- * @param source 新闻源配置
- * @param limit 获取数量
- * @param dateStart 可选，日期起始时间戳（秒）
- * @param dateEnd 可选，日期结束时间戳（秒）
- */
-async function fetchFromSource(
-  source: typeof NEWS_SOURCES[0],
-  limit: number,
-  dateStart?: number,
-  dateEnd?: number,
-  signal?: AbortSignal
-): Promise<Array<{
+/** 新闻输出类型 */
+export interface NewsItem {
   id: string;
   title: string;
   content: string;
@@ -1491,7 +1269,81 @@ async function fetchFromSource(
   date: string;
   importance: 'high' | 'normal';
   images?: string[];
-}>> {
+}
+
+/**
+ * 格式化 Unix 时间戳为时间字符串
+ */
+function formatNewsTime(timestamp: number): { time: string; date: string } {
+  const d = new Date(timestamp * 1000);
+  return {
+    time: `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`,
+    date: `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
+  };
+}
+
+/**
+ * 判断新闻重要性
+ */
+function getNewsImportance(title: string, content: string): 'high' | 'normal' {
+  const importantKeywords = [
+    '央行', '降准', '降息', '利率', 'LPR', '国务院', '证监会', '银保监',
+    '重磅', '突发', '重要', '紧急', '官宣', '发布会',
+    '涨停', '跌停', '暴涨', '暴跌', '大涨', '大跌',
+    '特朗普', '美联储', 'Fed', '鲍威尔', 'GDP', 'CPI', 'PPI', 'PMI',
+    '战争', '制裁', '关税', '贸易战',
+    '茅台', '比亚迪', '宁德时代', '华为', '特斯拉', '英伟达', '苹果',
+  ];
+  const text = (title + content).toLowerCase();
+  return importantKeywords.some(keyword => text.includes(keyword.toLowerCase())) ? 'high' : 'normal';
+}
+
+/**
+ * 安全解析 images 字段
+ * 数据库 jsonb 列可能返回已解析的数组，也可能返回 JSON 字符串
+ */
+function parseImages(images: unknown): string[] | undefined {
+  if (!images) return undefined;
+  if (Array.isArray(images)) {
+    return images.length > 0 ? images : undefined;
+  }
+  if (typeof images === 'string') {
+    const trimmed = images.trim();
+    if (!trimmed || trimmed === '[]' || trimmed === 'null') return undefined;
+    try {
+      const parsed = JSON.parse(trimmed);
+      return Array.isArray(parsed) && parsed.length > 0 ? parsed : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * 归一化时间戳（秒）
+ * 部分表的 display_time 是毫秒级（13位），需要转换为秒级（10位）
+ * 同时过滤掉明显异常的值（负数、0、远未来）
+ */
+function normalizeTimestamp(ts: number): number {
+  if (!ts || ts <= 0) return 0;
+  // 13位数字(毫秒)转换为秒：大于 10_000_000_000 表示秒级已超过 2286年，肯定是毫秒
+  if (ts > 10_000_000_000) {
+    return Math.floor(ts / 1000);
+  }
+  return ts;
+}
+
+/**
+ * 从单个新闻源获取数据
+ * 使用 ORDER BY id DESC（主键索引，稳定快速）替代 ORDER BY display_time DESC（无索引，大表超时）
+ * 客户端按 display_time 排序
+ */
+async function fetchFromSource(
+  source: typeof NEWS_SOURCES[0],
+  limit: number,
+  signal?: AbortSignal
+): Promise<NewsItem[]> {
   try {
     let query = supabaseNews
       .from(source.tableName)
@@ -1501,20 +1353,14 @@ async function fetchFromSource(
       query = query.abortSignal(signal);
     }
 
-    // 添加日期范围过滤
-    if (dateStart !== undefined) {
-      query = query.gte('display_time', dateStart);
-    }
-    if (dateEnd !== undefined) {
-      query = query.lte('display_time', dateEnd);
-    }
-
+    // 使用 ORDER BY id DESC —— 主键索引，查询稳定 300-500ms
+    // 而 ORDER BY display_time DESC 无索引，大表需要 1.5-2.6s，并发时容易超时
     const { data, error } = await query
-      .order('display_time', { ascending: false })
+      .order('id', { ascending: false })
       .limit(limit);
 
     if (error) {
-      console.warn(`获取 ${source.name} 数据失败:`, error.message);
+      logger.warn(`[News] ✖ ${source.name}(${source.tableName}): ${error.message}`);
       return [];
     }
 
@@ -1522,157 +1368,80 @@ async function fetchFromSource(
       return [];
     }
 
-    type NewsRow = {
-      id: string | number;
-      title: string;
-      content: string;
-      display_time: number;
-      images: string | null;
-    };
     const typedData = data as NewsRow[];
     return typedData.map((item) => {
-      const { time, date } = formatNewsTime(item.display_time);
+      const ts = normalizeTimestamp(item.display_time);
+      const { time, date } = formatNewsTime(ts);
       return {
         id: `${source.key}_${item.id}`,
         title: item.title || '',
         content: item.content || '',
         source: source.name,
         sourceKey: source.key,
-        display_time: item.display_time,
+        display_time: ts,
         time,
         date,
         importance: getNewsImportance(item.title || '', item.content || ''),
-        images: item.images ? JSON.parse(item.images) : undefined
+        images: parseImages(item.images),
       };
     });
   } catch (err) {
-    console.error(`获取 ${source.name} 数据异常:`, err);
+    logger.error(`[News] ✖ ${source.name}(${source.tableName}) 异常:`, err);
     return [];
   }
 }
 
 /**
  * 获取实时新闻聚合数据
- * @param params.sources - 指定新闻源key数组，不传则获取全部
- * @param params.limit - 每个源获取的数量，默认30
- * @param params.totalLimit - 返回的最大条数，默认100
- * @param params.dateFilter - 可选，筛选指定日期的新闻（格式：YYYY-MM-DD）
+ * 不做任何服务端日期过滤，直接从每个表取最新 N 条，客户端按日期分组/筛选
+ *
+ * @param params.sources  - 指定新闻源 key 数组，不传则获取全部
+ * @param params.limit    - 每个源获取条数，默认 50
+ * @param params.totalLimit - 返回最大总条数，默认 500
  */
 export async function fetchRealTimeNews(params: {
   sources?: string[];
   limit?: number;
   totalLimit?: number;
-  dateFilter?: string; // 格式：YYYY-MM-DD
-} = {}): Promise<Array<{
-  id: string;
-  title: string;
-  content: string;
-  source: string;
-  sourceKey: string;
-  display_time: number;
-  time: string;
-  date: string;
-  importance: 'high' | 'normal';
-  images?: string[];
-}>> {
-  const { sources, limit = 30, totalLimit = 100, dateFilter } = params;
-  const cacheKey = `news:realtime:${stableStringify({ sources: sources || null, limit, totalLimit, dateFilter: dateFilter || null })}`;
+} = {}): Promise<NewsItem[]> {
+  const { sources, limit = 50, totalLimit = 500 } = params;
+  const cacheKey = `news:realtime:v2:${stableStringify({ sources: sources || null, limit, totalLimit })}`;
 
   return requestWithCache(
     cacheKey,
     'fetchRealTimeNews',
     async (signal) => {
-      // 计算日期范围的时间戳
-      let dateStart: number | undefined;
-      let dateEnd: number | undefined;
-
-      if (dateFilter) {
-        const date = new Date(dateFilter);
-        date.setHours(0, 0, 0, 0);
-        dateStart = Math.floor(date.getTime() / 1000);
-
-        const endDate = new Date(dateFilter);
-        endDate.setHours(23, 59, 59, 999);
-        dateEnd = Math.floor(endDate.getTime() / 1000);
-      }
-
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const rpcClient = supabaseNews as any;
-        let rpcQuery = rpcClient.rpc('get_realtime_news_aggregated', {
-          p_sources: sources && sources.length > 0 ? sources : null,
-          p_limit_per_source: limit,
-          p_total_limit: totalLimit,
-          p_date_filter: dateFilter ?? null,
-        });
-
-        if (typeof rpcQuery?.abortSignal === 'function') {
-          rpcQuery = rpcQuery.abortSignal(signal);
-        }
-
-        const { data: rpcData, error: rpcError } = await rpcQuery;
-        if (!rpcError && Array.isArray(rpcData)) {
-          const sourceNameMap = new Map(NEWS_SOURCES.map(item => [item.key, item.name]));
-
-          return rpcData.map((item: Record<string, unknown>) => {
-            const displayTime = Number(item.display_time) || 0;
-            const { time, date } = formatNewsTime(displayTime);
-
-            let parsedImages: string[] | undefined;
-            if (typeof item.images === 'string' && item.images.trim()) {
-              try {
-                parsedImages = JSON.parse(item.images);
-              } catch {
-                parsedImages = undefined;
-              }
-            }
-
-            const sourceKey = String(item.source_key || '');
-            return {
-              id: String(item.id || ''),
-              title: String(item.title || ''),
-              content: String(item.content || ''),
-              source: sourceNameMap.get(sourceKey) || String(item.source || sourceKey),
-              sourceKey,
-              display_time: displayTime,
-              time,
-              date,
-              importance: getNewsImportance(String(item.title || ''), String(item.content || '')),
-              images: parsedImages,
-            } as {
-              id: string;
-              title: string;
-              content: string;
-              source: string;
-              sourceKey: string;
-              display_time: number;
-              time: string;
-              date: string;
-              importance: 'high' | 'normal';
-              images?: string[];
-            };
-          });
-        }
-      } catch (rpcErr) {
-        console.warn('RPC get_realtime_news_aggregated 调用失败，降级前端聚合:', rpcErr);
-      }
-
       const targetSources = sources
         ? NEWS_SOURCES.filter(s => sources.includes(s.key))
         : NEWS_SOURCES;
 
       if (targetSources.length === 0) {
-        console.warn('未指定有效的新闻源');
+        logger.warn('[News] 未指定有效的新闻源');
         return [];
       }
 
+      logger.log(`[News] 开始聚合 ${targetSources.length} 个新闻源, 每源取 ${limit} 条`);
+
+      // 并发度降到 3，避免数据库过载
       const results = await mapWithConcurrency(
         targetSources,
-        4,
-        (source) => fetchFromSource(source, limit, dateStart, dateEnd, signal)
+        3,
+        (source) => fetchFromSource(source, limit, signal)
       );
 
-      const allNews = results.flat();
+      // 合并所有源，过滤掉时间戳异常的记录（未来时间或无效值）
+      const nowTs = Math.floor(Date.now() / 1000) + 86400; // 允许未来 1 天容差
+      const allNews = results.flat().filter(item => item.display_time > 0 && item.display_time <= nowTs);
+
+      // 统计各源结果
+      const statsMap = new Map<string, number>();
+      allNews.forEach(item => {
+        statsMap.set(item.source, (statsMap.get(item.source) || 0) + 1);
+      });
+      const stats = Array.from(statsMap.entries()).map(([name, count]) => `${name}:${count}`);
+      logger.log(`[News] 聚合完成: 共 ${allNews.length} 条 [${stats.join(', ')}]`);
+
+      // 客户端按 display_time 降序排列
       allNews.sort((a, b) => b.display_time - a.display_time);
       return allNews.slice(0, totalLimit);
     },
@@ -1685,25 +1454,13 @@ export async function fetchRealTimeNews(params: {
  */
 export async function fetchNewsBySource(
   sourceKey: string,
-  limit = 50
-): Promise<Array<{
-  id: string;
-  title: string;
-  content: string;
-  source: string;
-  sourceKey: string;
-  display_time: number;
-  time: string;
-  date: string;
-  importance: 'high' | 'normal';
-  images?: string[];
-}>> {
+  limit = 80
+): Promise<NewsItem[]> {
   const source = NEWS_SOURCES.find(s => s.key === sourceKey);
   if (!source) {
-    console.warn(`未找到新闻源: ${sourceKey}`);
+    logger.warn(`未找到新闻源: ${sourceKey}`);
     return [];
   }
-
   return fetchFromSource(source, limit);
 }
 
@@ -1742,13 +1499,13 @@ export async function fetchStockList(params: {
     const { data, error } = await query;
 
     if (error) {
-      console.warn('获取股票列表失败:', error);
+      logger.warn('获取股票列表失败:', error);
       if (USE_MOCK_FALLBACK) return mockStocks;
       return [];
     }
 
     if (data && data.length > 0) {
-      console.log(`获取到 ${data.length} 只股票`);
+      logger.log(`获取到 ${data.length} 只股票`);
       return data.map((item: {
         ts_code: string;
         symbol: string;
@@ -1770,7 +1527,7 @@ export async function fetchStockList(params: {
     if (USE_MOCK_FALLBACK) return mockStocks;
     return [];
   } catch (error) {
-    console.error('获取股票列表失败:', error);
+    logger.error('获取股票列表失败:', error);
     if (USE_MOCK_FALLBACK) return mockStocks;
     return [];
   }
@@ -1832,11 +1589,11 @@ async function fetchStockListWithQuotesRaw(params: {
 
     const latestDate = (latestData as { trade_date: string }[] | null)?.[0]?.trade_date;
     if (!latestDate) {
-      console.warn('未找到最新交易日期');
+      logger.warn('未找到最新交易日期');
       return { data: [], total: 0 };
     }
 
-    console.log('最新交易日期:', latestDate);
+    logger.log('最新交易日期:', latestDate);
 
     // 如果有关键词搜索，先从 stock_basic 表获取匹配的股票代码
     let matchedCodes: string[] | null = null;
@@ -1892,7 +1649,7 @@ async function fetchStockListWithQuotesRaw(params: {
       const { data: dailyData, error: dailyError } = await dailyQuery;
 
       if (dailyError) {
-        console.error('获取daily数据失败:', dailyError);
+        logger.error('获取daily数据失败:', dailyError);
         return { data: [], total: 0 };
       }
 
@@ -1930,7 +1687,7 @@ async function fetchStockListWithQuotesRaw(params: {
         .in('ts_code', tsCodes);
 
       if (basicError) {
-        console.error('获取daily_basic数据失败:', basicError);
+        logger.error('获取daily_basic数据失败:', basicError);
       }
 
       // 获取股票基本信息
@@ -1941,7 +1698,7 @@ async function fetchStockListWithQuotesRaw(params: {
         .in('ts_code', tsCodes);
 
       if (stockBasicError) {
-        console.error('获取stock_basic数据失败:', stockBasicError);
+        logger.error('获取stock_basic数据失败:', stockBasicError);
       }
 
       // 构建映射
@@ -2013,7 +1770,7 @@ async function fetchStockListWithQuotesRaw(params: {
         };
       });
 
-      console.log(`获取到 ${result.length} 只股票行情数据，共 ${total} 只`);
+      logger.log(`获取到 ${result.length} 只股票行情数据，共 ${total} 只`);
       return { data: result, total };
 
     } else {
@@ -2052,7 +1809,7 @@ async function fetchStockListWithQuotesRaw(params: {
       const { data: basicData, error: basicError } = await query;
 
       if (basicError) {
-        console.error('获取daily_basic数据失败:', basicError);
+        logger.error('获取daily_basic数据失败:', basicError);
         return { data: [], total: 0 };
       }
 
@@ -2071,7 +1828,7 @@ async function fetchStockListWithQuotesRaw(params: {
         .in('ts_code', tsCodes);
 
       if (dailyError) {
-        console.error('获取daily数据失败:', dailyError);
+        logger.error('获取daily数据失败:', dailyError);
       }
 
       // 获取股票基本信息
@@ -2082,7 +1839,7 @@ async function fetchStockListWithQuotesRaw(params: {
         .in('ts_code', tsCodes);
 
       if (stockBasicError) {
-        console.error('获取stock_basic数据失败:', stockBasicError);
+        logger.error('获取stock_basic数据失败:', stockBasicError);
       }
 
       // 构建映射
@@ -2154,11 +1911,11 @@ async function fetchStockListWithQuotesRaw(params: {
         };
       });
 
-      console.log(`获取到 ${result.length} 只股票行情数据，共 ${total} 只`);
+      logger.log(`获取到 ${result.length} 只股票行情数据，共 ${total} 只`);
       return { data: result, total };
     }
   } catch (error) {
-    console.error('获取股票列表行情失败:', error);
+    logger.error('获取股票列表行情失败:', error);
     return { data: [], total: 0 };
   }
 }
@@ -2191,7 +1948,7 @@ export async function fetchStockDetail(tsCode: string): Promise<StockBasic | nul
       .single();
 
     if (error) {
-      console.warn('获取股票详情失败:', error);
+      logger.warn('获取股票详情失败:', error);
       return null;
     }
 
@@ -2209,61 +1966,8 @@ export async function fetchStockDetail(tsCode: string): Promise<StockBasic | nul
 
     return null;
   } catch (error) {
-    console.error('获取股票详情失败:', error);
+    logger.error('获取股票详情失败:', error);
     return null;
-  }
-}
-
-/**
- * 获取股票日线数据
- * 使用 daily_basic 表（包含估值指标）
- */
-export async function fetchStockDaily(tsCode: string, days = 60): Promise<DailyData[]> {
-  try {
-    const { data, error } = await supabaseStock
-      .from('daily_basic')
-      .select('*')
-      .eq('ts_code', tsCode)
-      .order('trade_date', { ascending: false })
-      .limit(days);
-
-    if (error) {
-      console.warn('获取股票日线数据失败:', error);
-      return [];
-    }
-
-    if (data && data.length > 0) {
-      console.log(`获取到 ${data.length} 条日线数据`);
-      return data.reverse().map((item: {
-        ts_code: string;
-        trade_date: string;
-        close: number;
-        turnover_rate: number;
-        volume_ratio: number;
-        pe: number;
-        pe_ttm: number;
-        pb: number;
-        total_mv: number;
-        circ_mv: number;
-      }) => ({
-        ts_code: item.ts_code,
-        trade_date: item.trade_date,
-        open: item.close, // daily_basic 没有 open
-        high: item.close,
-        low: item.close,
-        close: item.close,
-        pre_close: item.close,
-        change: 0,
-        pct_chg: 0,
-        vol: item.circ_mv ? item.circ_mv * item.turnover_rate / 100 : 0,
-        amount: item.total_mv || 0
-      }));
-    }
-
-    return [];
-  } catch (error) {
-    console.error('获取股票日线数据失败:', error);
-    return [];
   }
 }
 
@@ -2282,7 +1986,7 @@ export async function fetchRealtimeQuote(tsCode: string) {
       .limit(1);
 
     if (error) {
-      console.warn('获取实时行情失败:', error);
+      logger.warn('获取实时行情失败:', error);
       return null;
     }
 
@@ -2302,13 +2006,13 @@ export async function fetchRealtimeQuote(tsCode: string) {
         change_pct: number;
         change_amount: number;
       };
-      console.log(`获取到 ${quote.name || quote.ts_code} 实时行情: ${quote.price} (${quote.date} ${quote.time})`);
+      logger.log(`获取到 ${quote.name || quote.ts_code} 实时行情: ${quote.price} (${quote.date} ${quote.time})`);
       return quote;
     }
 
     return null;
   } catch (error) {
-    console.error('获取实时行情失败:', error);
+    logger.error('获取实时行情失败:', error);
     return null;
   }
 }
@@ -2344,12 +2048,12 @@ export async function fetchKLineData(tsCode: string, days = 60) {
     const { data, error } = historyResult;
 
     if (error) {
-      console.warn('获取K线数据失败:', error);
+      logger.warn('获取K线数据失败:', error);
       return generateKLineData(days);
     }
 
     if (data && data.length > 0) {
-      console.log(`获取到 ${data.length} 条历史K线数据`);
+      logger.log(`获取到 ${data.length} 条历史K线数据`);
 
       // 转换历史数据格式
       const klineData = data.reverse().map((item: {
@@ -2386,11 +2090,11 @@ export async function fetchKLineData(tsCode: string, days = 60) {
 
         if (realtimeDate > lastHistoryDate) {
           // 实时数据日期 > 历史最新日期：追加为新K线
-          console.log(`追加实时K线: ${realtimeDate}`);
+          logger.log(`追加实时K线: ${realtimeDate}`);
           klineData.push(realtimeBar);
         } else if (realtimeDate === lastHistoryDate) {
           // 实时数据日期 = 历史最新日期：更新最新K线
-          console.log(`更新最新K线: ${realtimeDate}`);
+          logger.log(`更新最新K线: ${realtimeDate}`);
           klineData[klineData.length - 1] = realtimeBar;
         }
         // 如果实时数据日期 < 历史最新日期，则忽略（可能是缓存过期数据）
@@ -2402,7 +2106,7 @@ export async function fetchKLineData(tsCode: string, days = 60) {
     // 降级到模拟数据
     return generateKLineData(days);
   } catch (error) {
-    console.error('获取K线数据失败:', error);
+    logger.error('获取K线数据失败:', error);
     return generateKLineData(days);
   }
 }
@@ -2425,14 +2129,14 @@ export async function fetchStockFullDetail(tsCode: string) {
       // 最新日线数据
       supabaseStock
         .from('daily')
-        .select('*')
+        .select('trade_date, open, high, low, close, pre_close, change, pct_chg, vol, amount')
         .eq('ts_code', tsCode)
         .order('trade_date', { ascending: false })
         .limit(1),
       // 最新估值指标
       supabaseStock
         .from('daily_basic')
-        .select('*')
+        .select('turnover_rate, turnover_rate_f, volume_ratio, pe, pe_ttm, pb, ps, ps_ttm, dv_ratio, dv_ttm, total_share, float_share, free_share, total_mv, circ_mv')
         .eq('ts_code', tsCode)
         .order('trade_date', { ascending: false })
         .limit(1)
@@ -2483,7 +2187,7 @@ export async function fetchStockFullDetail(tsCode: string) {
 
     // 降级处理：如果 stock_basic 表中没有数据，尝试从 new_share 表获取新股信息
     if (!basic) {
-      console.warn(`stock_basic 表中未找到 ${tsCode}，尝试从 new_share 表获取新股信息...`);
+      logger.warn(`stock_basic 表中未找到 ${tsCode}，尝试从 new_share 表获取新股信息...`);
 
       const { data: newShareData, error: newShareError } = await supabaseStock
         .from('new_share')
@@ -2492,7 +2196,7 @@ export async function fetchStockFullDetail(tsCode: string) {
         .single();
 
       if (newShareError) {
-        console.warn('从 new_share 表获取新股信息失败:', newShareError);
+        logger.warn('从 new_share 表获取新股信息失败:', newShareError);
       }
 
       if (newShareData) {
@@ -2504,7 +2208,7 @@ export async function fetchStockFullDetail(tsCode: string) {
           pe: number | null;
         };
 
-        console.log(`从 new_share 表获取到新股信息: ${newShare.name}(${tsCode})`);
+        logger.log(`从 new_share 表获取到新股信息: ${newShare.name}(${tsCode})`);
 
         // 构建降级的 basic 数据
         basic = {
@@ -2523,11 +2227,11 @@ export async function fetchStockFullDetail(tsCode: string) {
 
     // 如果仍然没有基本信息，返回 null
     if (!basic) {
-      console.warn('未找到股票基本信息:', tsCode);
+      logger.warn('未找到股票基本信息:', tsCode);
       return null;
     }
 
-    console.log(`获取 ${basic.name}(${tsCode}) 详情成功`);
+    logger.log(`获取 ${basic.name}(${tsCode}) 详情成功`);
 
     return {
       // 基本信息
@@ -2569,7 +2273,7 @@ export async function fetchStockFullDetail(tsCode: string) {
       circ_mv: dailyBasic?.circ_mv || 0  // 流通市值(万元)
     };
   } catch (error) {
-    console.error('获取股票完整详情失败:', error);
+    logger.error('获取股票完整详情失败:', error);
     return null;
   }
 }
@@ -2581,13 +2285,13 @@ export async function fetchStockMoneyFlow(tsCode: string, days = 5) {
   try {
     const { data, error } = await supabaseStock
       .from('moneyflow')
-      .select('*')
+      .select('trade_date, buy_sm_vol, buy_sm_amount, sell_sm_vol, sell_sm_amount, buy_md_vol, buy_md_amount, sell_md_vol, sell_md_amount, buy_lg_vol, buy_lg_amount, sell_lg_vol, sell_lg_amount, buy_elg_vol, buy_elg_amount, sell_elg_vol, sell_elg_amount, net_mf_vol, net_mf_amount')
       .eq('ts_code', tsCode)
       .order('trade_date', { ascending: false })
       .limit(days);
 
     if (error) {
-      console.warn('获取资金流向失败:', error);
+      logger.warn('获取资金流向失败:', error);
       return [];
     }
 
@@ -2640,7 +2344,7 @@ export async function fetchStockMoneyFlow(tsCode: string, days = 5) {
 
     return [];
   } catch (error) {
-    console.error('获取资金流向失败:', error);
+    logger.error('获取资金流向失败:', error);
     return [];
   }
 }
@@ -2663,12 +2367,12 @@ export async function fetchTimeSeriesData(tsCode: string, preClose?: number) {
       .order('time', { ascending: true });
 
     if (error) {
-      console.warn('获取分时数据失败:', error);
+      logger.warn('获取分时数据失败:', error);
       return generateTimeSeriesData(preClose);
     }
 
     if (data && data.length > 0) {
-      console.log(`获取到 ${data.length} 条分时数据`);
+      logger.log(`获取到 ${data.length} 条分时数据`);
 
       // 计算累计成交额和成交量，用于均价计算
       let cumulativeAmount = 0;
@@ -2699,10 +2403,10 @@ export async function fetchTimeSeriesData(tsCode: string, preClose?: number) {
     }
 
     // 降级到模拟数据
-    console.log('无分时数据，使用模拟数据');
+    logger.log('无分时数据，使用模拟数据');
     return generateTimeSeriesData(preClose);
   } catch (error) {
-    console.error('获取分时数据失败:', error);
+    logger.error('获取分时数据失败:', error);
     return generateTimeSeriesData(preClose);
   }
 }
@@ -2744,18 +2448,18 @@ export async function fetchMoneyFlow(tsCode: string, days = 10): Promise<MoneyFl
   try {
     const { data, error } = await supabaseStock
       .from('moneyflow')
-      .select('*')
+      .select('ts_code, trade_date, buy_sm_vol, buy_sm_amount, sell_sm_vol, sell_sm_amount, buy_md_vol, buy_md_amount, sell_md_vol, sell_md_amount, buy_lg_vol, buy_lg_amount, sell_lg_vol, sell_lg_amount, buy_elg_vol, buy_elg_amount, sell_elg_vol, sell_elg_amount')
       .eq('ts_code', tsCode)
       .order('trade_date', { ascending: false })
       .limit(days);
 
     if (error) {
-      console.warn('获取资金流向失败:', error);
+      logger.warn('获取资金流向失败:', error);
       return [];
     }
 
     if (data && data.length > 0) {
-      console.log(`获取到 ${data.length} 条资金流向数据`);
+      logger.log(`获取到 ${data.length} 条资金流向数据`);
       return data.reverse().map((item: {
         ts_code: string;
         trade_date: string;
@@ -2795,7 +2499,7 @@ export async function fetchMoneyFlow(tsCode: string, days = 10): Promise<MoneyFl
 
     return [];
   } catch (error) {
-    console.error('获取资金流向失败:', error);
+    logger.error('获取资金流向失败:', error);
     return [];
   }
 }
@@ -2816,13 +2520,13 @@ export async function fetchStrategies() {
       .order('updated_at', { ascending: false });
 
     if (error) {
-      console.warn('获取策略列表失败:', error);
+      logger.warn('获取策略列表失败:', error);
       return [];
     }
 
     return data || [];
   } catch (error) {
-    console.error('获取策略列表失败:', error);
+    logger.error('获取策略列表失败:', error);
     return [];
   }
 }
@@ -2855,7 +2559,7 @@ export async function saveStrategy(strategy: {
 
     return data;
   } catch (error) {
-    console.error('保存策略失败:', error);
+    logger.error('保存策略失败:', error);
     throw error;
   }
 }
@@ -2869,43 +2573,37 @@ export async function saveStrategy(strategy: {
  */
 export async function fetchKplConcepts() {
   try {
-    const recentDates = getRecentTradeDates(5);
+    // 一次查询获取最新有数据的交易日（替代串行日期轮询）
+    const { data, error } = await supabaseStock
+      .from('kpl_concept')
+      .select('ts_code, name, z_t_num, up_num, trade_date')
+      .order('trade_date', { ascending: false })
+      .order('z_t_num', { ascending: false })
+      .limit(40);
 
-    for (const tradeDate of recentDates) {
-      const { data, error } = await supabaseStock
-        .from('kpl_concept')
-        .select('*')
-        .eq('trade_date', tradeDate)
-        .order('z_t_num', { ascending: false })
-        .limit(20);
-
-      if (error) {
-        console.warn(`查询 ${tradeDate} 的开盘啦概念失败:`, error);
-        continue;
-      }
-
-      if (data && data.length > 0) {
-        console.log(`使用交易日 ${tradeDate} 的开盘啦概念数据`);
-        return data.map((item: {
-          ts_code: string;
-          name: string;
-          z_t_num: number;
-          up_num: string;
-          trade_date: string;
-        }) => ({
-          ts_code: item.ts_code,
-          name: item.name,
-          limit_up_count: item.z_t_num || 0,
-          up_count: parseInt(item.up_num) || 0,
-          trade_date: item.trade_date
-        }));
-      }
+    if (error) {
+      logger.warn('查询开盘啦概念失败:', error);
+      return mockKplConcepts;
     }
 
-    console.warn('未找到开盘啦概念数据，使用模拟数据');
+    if (data && data.length > 0) {
+      // 找到最新交易日，只取该日数据
+      const latestDate = (data as { trade_date: string }[])[0].trade_date;
+      const latestData = (data as { ts_code: string; name: string; z_t_num: number; up_num: string; trade_date: string }[])
+        .filter(item => item.trade_date === latestDate)
+        .slice(0, 20);
+      return latestData.map(item => ({
+        ts_code: item.ts_code,
+        name: item.name,
+        limit_up_count: item.z_t_num || 0,
+        up_count: parseInt(item.up_num) || 0,
+        trade_date: item.trade_date
+      }));
+    }
+
     return mockKplConcepts;
   } catch (error) {
-    console.error('获取开盘啦题材失败:', error);
+    logger.error('获取开盘啦题材失败:', error);
     return mockKplConcepts;
   }
 }
@@ -2915,56 +2613,41 @@ export async function fetchKplConcepts() {
  */
 export async function fetchHsgtTop10() {
   try {
-    const recentDates = getRecentTradeDates(3);
+    // 一次查询获取最新有数据的交易日（替代串行日期轮询）
+    const { data, error } = await supabaseStock
+      .from('hsgt_top10')
+      .select('ts_code, name, close, change, rank, market_type, amount, net_amount, trade_date')
+      .order('trade_date', { ascending: false })
+      .order('rank', { ascending: true })
+      .limit(20);
 
-    for (const tradeDate of recentDates) {
-      const { data, error } = await supabaseStock
-        .from('hsgt_top10')
-        .select('*')
-        .eq('trade_date', tradeDate)
-        .order('rank', { ascending: true })
-        .limit(10);
-
-      if (error) {
-        console.warn(`查询 ${tradeDate} 的沪深股通Top10失败:`, error);
-        continue;
-      }
-
-      if (data && data.length > 0) {
-        console.log(`使用交易日 ${tradeDate} 的沪深股通数据，共 ${data.length} 条`);
-        return data.map((item: {
-          ts_code: string;
-          name: string;
-          close: number;
-          change: number;
-          rank: number;
-          market_type: number;
-          amount: number;
-          net_amount: number | null;
-        }) => ({
-          ts_code: item.ts_code,
-          name: item.name,
-          close: item.close,
-          change: item.change,
-          rank: item.rank,
-          market_type: item.market_type === 1 ? '沪股通' : item.market_type === 2 ? '深股通' : '港股通',
-          amount: item.amount,
-          net_amount: item.net_amount
-        }));
-      }
+    if (error) {
+      logger.warn('查询沪深股通Top10失败:', error);
+      return mockHsgtTop10;
     }
 
-    console.warn('未找到沪深股通数据，使用模拟数据');
+    if (data && data.length > 0) {
+      const latestDate = (data as { trade_date: string }[])[0].trade_date;
+      const latestData = (data as { ts_code: string; name: string; close: number; change: number; rank: number; market_type: number; amount: number; net_amount: number | null; trade_date: string }[])
+        .filter(item => item.trade_date === latestDate)
+        .slice(0, 10);
+      return latestData.map(item => ({
+        ts_code: item.ts_code,
+        name: item.name,
+        close: item.close,
+        change: item.change,
+        rank: item.rank,
+        market_type: item.market_type === 1 ? '沪股通' : item.market_type === 2 ? '深股通' : '港股通',
+        amount: item.amount,
+        net_amount: item.net_amount
+      }));
+    }
+
     return mockHsgtTop10;
   } catch (error) {
-    console.error('获取沪深股通Top10失败:', error);
+    logger.error('获取沪深股通Top10失败:', error);
     return mockHsgtTop10;
   }
-}
-
-function getFormattedUpdateTime(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
 }
 
 /**
@@ -2991,16 +2674,21 @@ export async function fetchMarketOverviewBundle(forceRefresh = false): Promise<M
           if (!rpcError && rpcData) {
             clearRpcDisableFlag(rpcName);
             const payload = typeof rpcData === 'string' ? JSON.parse(rpcData) : rpcData;
-            return {
-              indices: payload.indices || [],
-              sectors: payload.sectors || [],
-              limitUpList: payload.limitUpList || [],
-              upDownDistribution: payload.upDownDistribution || null,
-              enhancedSentiment: payload.enhancedSentiment || null,
-              northFlow: payload.northFlow || null,
-              hsgtTop10: payload.hsgtTop10 || [],
-              updateTime: payload.updateTime || getFormattedUpdateTime(),
-            } as MarketOverviewBundle;
+            // RPC 内部错误时返回 {error: true, message: ...}，跳过
+            if (payload?.error) {
+              logger.warn('RPC get_market_overview_bundle 内部错误:', payload.message);
+            } else {
+              return {
+                indices: payload.indices || [],
+                sectors: payload.sectors || [],
+                limitUpList: payload.limitUpList || [],
+                upDownDistribution: payload.upDownDistribution || null,
+                enhancedSentiment: payload.enhancedSentiment || null,
+                northFlow: payload.northFlow || null,
+                hsgtTop10: payload.hsgtTop10 || [],
+                updateTime: payload.updateTime || getFormattedUpdateTime(),
+              } as MarketOverviewBundle;
+            }
           }
 
           if (rpcError && shouldDisableRpcAfterError(rpcError)) {
@@ -3010,7 +2698,7 @@ export async function fetchMarketOverviewBundle(forceRefresh = false): Promise<M
           if (shouldDisableRpcAfterError(rpcErr)) {
             disableRpcTemporarily(rpcName);
           }
-          console.warn('RPC get_market_overview_bundle 调用失败，降级前端聚合:', rpcErr);
+          logger.warn('RPC get_market_overview_bundle 调用失败，降级前端聚合:', rpcErr);
         }
       }
 
@@ -3100,12 +2788,12 @@ export async function fetchThsHot(dataType: '行业板块' | '概念板块' | '�
       .limit(limit * 3); // 多获取一些以确保有足够的最新数据
 
     if (error) {
-      console.error('获取热榜数据失败:', error);
+      logger.error('获取热榜数据失败:', error);
       return [];
     }
 
     if (!data || data.length === 0) {
-      console.warn('未找到热榜数据:', dataType);
+      logger.warn('未找到热榜数据:', dataType);
       return [];
     }
 
@@ -3114,17 +2802,17 @@ export async function fetchThsHot(dataType: '行业板块' | '概念板块' | '�
 
     // 找到最新交易日
     const latestDate = typedData[0].trade_date;
-    console.log(`热榜 [${dataType}] 最新日期: ${latestDate}`);
+    logger.log(`热榜 [${dataType}] 最新日期: ${latestDate}`);
 
     // 只返回最新交易日的数据
     const latestData = typedData
       .filter(item => item.trade_date === latestDate)
       .slice(0, limit);
 
-    console.log(`热榜 [${dataType}] 返回 ${latestData.length} 条数据`);
+    logger.log(`热榜 [${dataType}] 返回 ${latestData.length} 条数据`);
     return latestData;
   } catch (error) {
-    console.error('获取热榜数据异常:', error);
+    logger.error('获取热榜数据异常:', error);
     return [];
   }
 }
@@ -3181,8 +2869,14 @@ export async function fetchConceptHotList(limit = 15): Promise<SectorHotData[]> 
  * 获取热股榜
  */
 export async function fetchHotStockList(limit = 20): Promise<HotStockData[]> {
-  const data = await fetchThsHot('热股', limit);
-  return data.map(item => {
+  const data = await fetchThsHot('热股', limit * 2); // 多获取一些用于去重
+
+  // 按 ts_code 去重，保留热度最高的
+  const uniqueMap = new Map<string, HotStockData>();
+  data.forEach(item => {
+    const existing = uniqueMap.get(item.ts_code);
+    if (existing && (existing.hot || 0) >= (item.hot || 0)) return;
+
     // 解析 concept 字段（兼容 JSON 字符串、逗号分隔字符串、数组）
     let concepts: string[] = [];
     if (Array.isArray(item.concept)) {
@@ -3202,15 +2896,17 @@ export async function fetchHotStockList(limit = 20): Promise<HotStockData[]> {
         }
       }
     }
-    return {
+    uniqueMap.set(item.ts_code, {
       ts_code: item.ts_code,
       ts_name: item.ts_name,
       rank: item.rank,
       pct_change: item.pct_change || 0,
       hot: item.hot || 0,
       concepts
-    };
+    });
   });
+
+  return Array.from(uniqueMap.values()).slice(0, limit);
 }
 
 function buildSectorHeatmapDataFromLists(
@@ -3276,40 +2972,60 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function normalizeSectorHotData(items: unknown[]): SectorHotData[] {
-  return items.map((item, index) => {
+  // 去重：同一 ts_name 只保留热度最高的一条
+  const uniqueMap = new Map<string, SectorHotData>();
+  items.forEach((item, index) => {
     const row = asRecord(item);
-    return {
-      ts_code: String(row.ts_code ?? ''),
-      ts_name: String(row.ts_name ?? row.name ?? `板块${index + 1}`),
-      rank: toFiniteNumber(row.rank, index + 1),
-      pct_change: toFiniteNumber(row.pct_change, 0),
-      hot: toFiniteNumber(row.hot, 0),
-    };
+    const name = String(row.ts_name ?? row.name ?? `板块${index + 1}`);
+    const hot = toFiniteNumber(row.hot, 0);
+    const existing = uniqueMap.get(name);
+    if (!existing || hot > existing.hot) {
+      uniqueMap.set(name, {
+        ts_code: String(row.ts_code ?? ''),
+        ts_name: name,
+        rank: toFiniteNumber(row.rank, index + 1),
+        pct_change: toFiniteNumber(row.pct_change, 0),
+        hot,
+      });
+    }
   });
+  return Array.from(uniqueMap.values());
 }
 
 function normalizeHotStockData(items: unknown[]): HotStockData[] {
-  return items.map((item, index) => {
+  // 去重：同一 ts_code 只保留热度最高的一条
+  const uniqueMap = new Map<string, HotStockData>();
+  items.forEach((item, index) => {
     const row = asRecord(item);
-    return {
-      ts_code: String(row.ts_code ?? ''),
-      ts_name: String(row.ts_name ?? row.name ?? `热股${index + 1}`),
-      rank: toFiniteNumber(row.rank, index + 1),
-      pct_change: toFiniteNumber(row.pct_change, 0),
-      hot: toFiniteNumber(row.hot, 0),
-      concepts: toStringArray(row.concepts ?? row.concept),
-    };
+    const code = String(row.ts_code ?? '');
+    const hot = toFiniteNumber(row.hot, 0);
+    const existing = uniqueMap.get(code);
+    if (!existing || hot > existing.hot) {
+      uniqueMap.set(code, {
+        ts_code: code,
+        ts_name: String(row.ts_name ?? row.name ?? `热股${index + 1}`),
+        rank: toFiniteNumber(row.rank, index + 1),
+        pct_change: toFiniteNumber(row.pct_change, 0),
+        hot,
+        concepts: toStringArray(row.concepts ?? row.concept),
+      });
+    }
   });
+  return Array.from(uniqueMap.values());
 }
 
 function normalizeKplConcepts(items: unknown[]): SectorHeatBundle['kplConcepts'] {
-  return items.map((item, index) => {
+  // 去重：同一 name 只保留第一条（涨停数最多的）
+  const uniqueMap = new Map<string, SectorHeatBundle['kplConcepts'][0]>();
+  items.forEach((item, index) => {
     const row = asRecord(item);
+    const name = String(row.name ?? `题材${index + 1}`);
+    if (uniqueMap.has(name)) return;
     const tradeDateRaw = row.trade_date;
     const leadingStockRaw = row.leading_stock;
-    return {
+    uniqueMap.set(name, {
       ts_code: row.ts_code ? String(row.ts_code) : undefined,
-      name: String(row.name ?? `题材${index + 1}`),
+      name,
       limit_up_count: toFiniteNumber(row.limit_up_count ?? row.z_t_num, 0),
       up_count: toFiniteNumber(row.up_count ?? row.up_num, 0),
       trade_date: tradeDateRaw ? String(tradeDateRaw) : undefined,
@@ -3317,21 +3033,28 @@ function normalizeKplConcepts(items: unknown[]): SectorHeatBundle['kplConcepts']
       leading_stock: leadingStockRaw ? String(leadingStockRaw) : undefined,
       leading_change: toFiniteNumber(row.leading_change, 0),
       total: toFiniteNumber(row.total, 0),
-    };
+    });
   });
+  return Array.from(uniqueMap.values());
 }
 
 function normalizeHeatmapData(items: unknown[]): SectorHeatBundle['heatmapData'] {
-  return items.map((item, index) => {
+  // 去重：同一名称只保留一条
+  const seen = new Map<string, SectorHeatBundle['heatmapData'][0]>();
+  items.forEach((item, index) => {
     const row = asRecord(item);
-    const rawType = String(row.type ?? 'industry').toLowerCase();
-    return {
-      name: String(row.name ?? row.ts_name ?? `板块${index + 1}`),
-      value: toFiniteNumber(row.value ?? row.pct_change, 0),
-      size: Math.max(30, toFiniteNumber(row.size, 50)),
-      type: rawType === 'concept' ? 'concept' : 'industry',
-    };
+    const name = String(row.name ?? row.ts_name ?? `板块${index + 1}`);
+    if (!seen.has(name)) {
+      const rawType = String(row.type ?? 'industry').toLowerCase();
+      seen.set(name, {
+        name,
+        value: toFiniteNumber(row.value ?? row.pct_change, 0),
+        size: Math.max(30, toFiniteNumber(row.size, 50)),
+        type: rawType === 'concept' ? 'concept' : 'industry',
+      });
+    }
   });
+  return Array.from(seen.values());
 }
 
 function normalizeSectorHeatBundlePayload(payload: unknown, limit = 30): SectorHeatBundle {
@@ -3364,7 +3087,7 @@ export async function fetchSectorHeatmapData(limit = 30): Promise<{ name: string
     ]);
     return buildSectorHeatmapDataFromLists(industryData, conceptData, limit);
   } catch (error) {
-    console.error('获取热力图数据失败:', error);
+    logger.error('获取热力图数据失败:', error);
     return [];
   }
 }
@@ -3390,7 +3113,7 @@ export async function fetchSectorHeatBundle(limit = 30): Promise<SectorHeatBundl
           return normalizeSectorHeatBundlePayload(payload, limit);
         }
       } catch (rpcErr) {
-        console.warn('RPC get_sector_heat_bundle 调用失败，降级前端聚合:', rpcErr);
+        logger.warn('RPC get_sector_heat_bundle 调用失败，降级前端聚合:', rpcErr);
       }
 
       const [industryHotList, conceptHotList, hotStockList, kplConcepts] = await Promise.all([
@@ -3413,8 +3136,531 @@ export async function fetchSectorHeatBundle(limit = 30): Promise<SectorHeatBundl
 }
 
 // ===========================================
+// 板块成分股服务
+// ===========================================
+
+/**
+ * 板块成分股数据类型
+ */
+export interface SectorMemberStock {
+  ts_code: string;
+  name: string;
+  close: number;
+  pct_chg: number;
+  change: number;
+  open: number;
+  high: number;
+  low: number;
+  pre_close: number;
+  vol: number;
+  amount: number;
+  turnover_rate: number;
+  pe_ttm: number;
+  total_mv: number;
+}
+
+/** 成分股查询结果（含数据来源标识） */
+export interface SectorMemberResult {
+  stocks: SectorMemberStock[];
+  /** full = 完整成分股, partial = 近期关联个股（涨跌停数据） */
+  dataSource: 'full' | 'partial';
+}
+
+/**
+ * 通过板块名称获取板块信息（代码 + 类型）
+ * 用于热力图点击（只有名称没有 ts_code 的场景）
+ */
+export async function fetchSectorCodeByName(name: string): Promise<string | null> {
+  try {
+    const { data, error } = await supabaseStock
+      .from('ths_index')
+      .select('ts_code')
+      .eq('name', name)
+      .limit(1);
+
+    if (error || !data || data.length === 0) {
+      logger.warn('未找到板块代码:', name, error);
+      return null;
+    }
+    return (data[0] as { ts_code: string }).ts_code;
+  } catch (err) {
+    logger.error('获取板块代码失败:', err);
+    return null;
+  }
+}
+
+/**
+ * THS 行业名 → stock_basic.industry 的名称映射
+ * 两个分类体系不同，需要静态映射 + 模糊匹配
+ */
+const THS_TO_INDUSTRY_MAP: Record<string, string | string[]> = {
+  // 精确对应
+  '白酒': '白酒',
+  '银行': '银行',
+  '证券': '证券',
+  '保险': '保险',
+  '半导体': '半导体',
+  '通信设备': '通信设备',
+  '小金属': '小金属',
+  '水泥': '水泥',
+  '煤炭开采': '煤炭开采',
+  '塑料': '塑料',
+  '化纤': '化纤',
+  '纺织': '纺织',
+  '造纸': '造纸',
+  '橡胶': '橡胶',
+  '船舶': '船舶',
+  '铝': '铝',
+  '铜': '铜',
+  '饲料': '饲料',
+  '玻璃': '玻璃',
+  '食品': '食品',
+  '港口': '港口',
+  '黄金': '黄金',
+  '啤酒': '啤酒',
+  '铁路': '铁路',
+  '渔业': '渔业',
+  '林业': '林业',
+  '公路': '公路',
+  '水务': '水务',
+  '陶瓷': '陶瓷',
+
+  // 名称近似映射
+  '电网设备': '电气设备',
+  '元件': '元器件',
+  '光伏设备': '电气设备',
+  '风电设备': '电气设备',
+  '电池': '电气设备',
+  '电力': '新型电力',
+  '电力设备': '电气设备',
+  '环境治理': '环境保护',
+  '环保': '环境保护',
+  '影视院线': '影视音像',
+  '文化传媒': ['影视音像', '出版业'],
+  '油气开采及服务': '石油开采',
+  '油气': '石油开采',
+  '石油石化': '石油加工',
+  '农化制品': '农药化肥',
+  '农药': '农药化肥',
+  '钢铁': ['普钢', '特种钢', '钢加工'],
+  '房地产': ['区域地产', '全国地产'],
+  '地产': ['区域地产', '全国地产'],
+  '贵金属': '黄金',
+  '军工装备': '航空',
+  '军工': '航空',
+  '国防军工': '航空',
+  '汽车': ['汽车整车', '汽车配件', '汽车服务'],
+  '汽车零部件': '汽车配件',
+  '家电': '家用电器',
+  '家用电器': '家用电器',
+  '医药': ['化学制药', '生物制药', '中成药'],
+  '医药生物': ['化学制药', '生物制药'],
+  '中药': '中成药',
+  '软件': '软件服务',
+  '软件开发': '软件服务',
+  '计算机': ['软件服务', 'IT设备'],
+  '互联网': '互联网',
+  '多元金融': '多元金融',
+  '建筑': '建筑工程',
+  '建材': ['水泥', '其他建材'],
+  '物流': '仓储物流',
+  '快递': '仓储物流',
+  '旅游': ['旅游景点', '旅游服务'],
+  '酒店': '酒店餐饮',
+  '商业百货': '百货',
+  '零售': ['百货', '超市连锁'],
+  '农业': '农业综合',
+  '养殖': '农业综合',
+  '种业': '种植业',
+  '工程机械': '工程机械',
+  '机床': '机床制造',
+  '摩托车': '摩托车',
+  '服装': '服饰',
+  '纺织服饰': ['纺织', '服饰'],
+  '化工': '化工原料',
+  '基础化工': '化工原料',
+  '电信': '电信运营',
+  '石油贸易': '石油贸易',
+  '装修': '装修装饰',
+  '装饰': '装修装饰',
+  '乳业': '乳制品',
+  '焦炭': '焦炭加工',
+  '水运': '水运',
+  '航运': '水运',
+  '医药流通': '医药商业',
+  '火电': '火力发电',
+  '水电': '水力发电',
+  '日化': '日用化工',
+  '铅锌': '铅锌',
+  '钨': '小金属',
+  '稀土': '小金属',
+  '锂': '小金属',
+  '钴': '小金属',
+  '磁材': '小金属',
+  '供气': '供气供热',
+  '燃气': '供气供热',
+  '园区': '园区开发',
+  '电商': '互联网',
+  '游戏': '互联网',
+  '传媒': ['影视音像', '出版业'],
+  '公交': '公共交通',
+  '轻工': '轻工机械',
+  '矿物': '矿物制品',
+  '染料': '染料涂料',
+  '涂料': '染料涂料',
+  '商贸': '商贸代理',
+  '机械': '专用机械',
+  '家居': '家居用品',
+  '建筑材料': ['水泥', '其他建材', '玻璃'],
+  '有色金属': ['铝', '铜', '铅锌', '小金属', '黄金'],
+  '食品饮料': ['食品', '白酒', '啤酒', '乳制品', '软饮料'],
+  '非银金融': ['证券', '保险', '多元金融'],
+  '电子': ['元器件', '半导体'],
+  '通信': ['通信设备', '电信运营'],
+  '机械设备': ['专用机械', '工程机械', '机械基件'],
+};
+
+/**
+ * 通过 THS 板块名称查找匹配的 stock_basic.industry 名称
+ * 优先使用静态映射表，再尝试精确匹配和模糊匹配
+ */
+async function findMatchingIndustry(sectorName: string): Promise<string[] | null> {
+  // 1. 静态映射
+  const mapped = THS_TO_INDUSTRY_MAP[sectorName];
+  if (mapped) {
+    const industries = Array.isArray(mapped) ? mapped : [mapped];
+    return industries;
+  }
+
+  // 2. 精确匹配
+  const { count: exactCount } = await supabaseStock
+    .from('stock_basic')
+    .select('*', { count: 'exact', head: true })
+    .eq('industry', sectorName);
+
+  if (exactCount && exactCount > 0) return [sectorName];
+
+  // 3. 模糊匹配：去后缀搜索
+  const stripped = sectorName
+    .replace(/(设备|板块|行业|及服务|制造|开采)$/g, '')
+    .replace(/^(Ⅲ|Ⅱ|III|II)/, '')
+    .trim();
+
+  if (stripped && stripped !== sectorName) {
+    const { data: fuzzyMatch } = await supabaseStock
+      .from('stock_basic')
+      .select('industry')
+      .ilike('industry', `%${stripped}%`)
+      .limit(1);
+
+    if (fuzzyMatch && fuzzyMatch.length > 0) {
+      return [(fuzzyMatch[0] as { industry: string }).industry];
+    }
+  }
+
+  // 4. 前两字模糊搜索
+  if (sectorName.length >= 2) {
+    const prefix = sectorName.substring(0, 2);
+    const { data: prefixMatch } = await supabaseStock
+      .from('stock_basic')
+      .select('industry')
+      .ilike('industry', `%${prefix}%`)
+      .limit(1);
+
+    if (prefixMatch && prefixMatch.length > 0) {
+      return [(prefixMatch[0] as { industry: string }).industry];
+    }
+  }
+
+  return null;
+}
+
+/**
+ * 获取板块成分股列表（带行情数据）
+ *
+ * 策略：
+ * - 行业板块 (type=I): 通过 stock_basic.industry 匹配行业名获取成分股 → dataSource='full'
+ * - 概念板块 (type=N): 多源聚合关联个股
+ *     1) kpl_concept_cons 精确匹配
+ *     2) limit_list_ths.lu_desc 模糊匹配
+ *     3) kpl_list.theme / lu_desc 模糊匹配
+ *   → dataSource='partial'（近期涨跌停关联个股，非完整成分股）
+ */
+export async function fetchSectorMembers(sectorCode: string, sectorName?: string): Promise<SectorMemberResult> {
+  const emptyResult: SectorMemberResult = { stocks: [], dataSource: 'full' };
+
+  try {
+    // 如果没有传名称，从 ths_index 获取
+    let name = sectorName;
+    if (!name) {
+      const { data: indexData } = await supabaseStock
+        .from('ths_index')
+        .select('name')
+        .eq('ts_code', sectorCode)
+        .limit(1);
+      name = (indexData as { name: string }[] | null)?.[0]?.name;
+    }
+
+    if (!name) {
+      logger.warn('无法获取板块名称:', sectorCode);
+      return emptyResult;
+    }
+
+    // 通过 ths_index.type 判断是否为概念板块（type=N 为概念，type=I 为行业）
+    const { data: indexTypeData } = await supabaseStock
+      .from('ths_index')
+      .select('type')
+      .eq('ts_code', sectorCode)
+      .limit(1);
+    const sectorType = (indexTypeData as { type: string }[] | null)?.[0]?.type;
+    const isConcept = sectorType === 'N';
+
+    if (isConcept) {
+      return fetchConceptSectorMembers(name);
+    }
+
+    // ========== 行业板块：通过 stock_basic.industry 匹配 ==========
+    const industryNames = await findMatchingIndustry(name);
+    if (!industryNames || industryNames.length === 0) {
+      logger.warn(`未找到匹配的行业: ${name}`);
+      return emptyResult;
+    }
+
+    logger.log(`板块 "${name}" 匹配行业: ${JSON.stringify(industryNames)}`);
+    const stocks = await fetchStocksDailyData(
+      async () => {
+        const { data } = await supabaseStock
+          .from('stock_basic')
+          .select('ts_code, name')
+          .in('industry', industryNames)
+          .limit(500);
+        return (data as { ts_code: string; name: string }[] | null) || [];
+      }
+    );
+    return { stocks, dataSource: 'full' };
+  } catch (err) {
+    logger.error('获取板块成分股失败:', err);
+    return emptyResult;
+  }
+}
+
+/**
+ * 概念板块成分股：多源聚合
+ * 1) kpl_concept_cons 精确名称匹配
+ * 2) limit_list_ths.lu_desc 模糊匹配
+ * 3) kpl_list.theme / lu_desc 模糊匹配
+ */
+async function fetchConceptSectorMembers(conceptName: string): Promise<SectorMemberResult> {
+  // 生成搜索关键词：去掉 "概念" 后缀
+  const keyword = conceptName
+    .replace(/概念$/g, '')
+    .replace(/\(.*?\)$/g, '')
+    .trim();
+
+  if (!keyword) {
+    return { stocks: [], dataSource: 'partial' };
+  }
+
+  const collectedCodes = new Map<string, string>(); // ts_code → name
+
+  // 1) kpl_concept_cons：精确匹配概念名
+  try {
+    const { data: kplData } = await supabaseStock
+      .from('kpl_concept_cons')
+      .select('con_code, con_name')
+      .eq('name', conceptName);
+
+    if (!kplData || kplData.length === 0) {
+      // 也试去掉"概念"后缀的名称
+      const { data: kplData2 } = await supabaseStock
+        .from('kpl_concept_cons')
+        .select('con_code, con_name')
+        .eq('name', keyword);
+
+      (kplData2 as { con_code: string; con_name: string }[] | null)?.forEach(d => {
+        if (d.con_code && !collectedCodes.has(d.con_code)) {
+          collectedCodes.set(d.con_code, d.con_name);
+        }
+      });
+    } else {
+      (kplData as { con_code: string; con_name: string }[]).forEach(d => {
+        if (d.con_code && !collectedCodes.has(d.con_code)) {
+          collectedCodes.set(d.con_code, d.con_name);
+        }
+      });
+    }
+  } catch {
+    // kpl_concept_cons 可能不存在，静默跳过
+  }
+
+  // 2) limit_list_ths.lu_desc 模糊匹配
+  try {
+    const { data: lltData } = await supabaseStock
+      .from('limit_list_ths')
+      .select('ts_code, name')
+      .ilike('lu_desc', `%${keyword}%`);
+
+    (lltData as { ts_code: string; name: string }[] | null)?.forEach(d => {
+      if (d.ts_code && !collectedCodes.has(d.ts_code)) {
+        collectedCodes.set(d.ts_code, d.name);
+      }
+    });
+  } catch {
+    // 静默
+  }
+
+  // 3) kpl_list.theme + lu_desc 模糊匹配
+  try {
+    const [themeRes, descRes] = await Promise.all([
+      supabaseStock
+        .from('kpl_list')
+        .select('ts_code, name')
+        .ilike('theme', `%${keyword}%`),
+      supabaseStock
+        .from('kpl_list')
+        .select('ts_code, name')
+        .ilike('lu_desc', `%${keyword}%`),
+    ]);
+
+    for (const res of [themeRes, descRes]) {
+      (res.data as { ts_code: string; name: string }[] | null)?.forEach(d => {
+        if (d.ts_code && !collectedCodes.has(d.ts_code)) {
+          collectedCodes.set(d.ts_code, d.name);
+        }
+      });
+    }
+  } catch {
+    // 静默
+  }
+
+  if (collectedCodes.size === 0) {
+    logger.warn(`概念板块 "${conceptName}" 未找到关联个股`);
+    return { stocks: [], dataSource: 'partial' };
+  }
+
+  logger.log(`概念 "${conceptName}" 聚合到 ${collectedCodes.size} 只关联个股`);
+
+  // 获取行情数据
+  const stocks = await fetchStocksDailyData(
+    async () => Array.from(collectedCodes.entries()).map(([ts_code, name]) => ({ ts_code, name }))
+  );
+  return { stocks, dataSource: 'partial' };
+}
+
+/**
+ * 根据股票列表获取最新行情数据（通用函数，供行业/概念共用）
+ */
+async function fetchStocksDailyData(
+  getStockList: () => Promise<{ ts_code: string; name: string }[]>
+): Promise<SectorMemberStock[]> {
+  const stockList = await getStockList();
+  if (stockList.length === 0) return [];
+
+  const codes = stockList.map(s => s.ts_code);
+  const nameMap = new Map(stockList.map(s => [s.ts_code, s.name]));
+
+  // 获取最新交易日
+  const { data: latestData } = await supabaseStock
+    .from('daily')
+    .select('trade_date')
+    .order('trade_date', { ascending: false })
+    .limit(1);
+
+  const latestDate = (latestData as { trade_date: string }[] | null)?.[0]?.trade_date;
+  if (!latestDate) return [];
+
+  // 批量查询行情（分批避免超限）
+  const batchSize = 100;
+  const results: SectorMemberStock[] = [];
+
+  for (let i = 0; i < codes.length; i += batchSize) {
+    const batch = codes.slice(i, i + batchSize);
+
+    const [dailyRes, basicRes] = await Promise.all([
+      supabaseStock
+        .from('daily')
+        .select('ts_code, close, pct_chg, change, open, high, low, pre_close, vol, amount')
+        .eq('trade_date', latestDate)
+        .in('ts_code', batch),
+      supabaseStock
+        .from('daily_basic')
+        .select('ts_code, turnover_rate, pe_ttm, total_mv')
+        .eq('trade_date', latestDate)
+        .in('ts_code', batch),
+    ]);
+
+    const dailyMap = new Map(
+      ((dailyRes.data || []) as Record<string, unknown>[]).map(d => [String(d.ts_code), d])
+    );
+    const basicMap = new Map(
+      ((basicRes.data || []) as Record<string, unknown>[]).map(d => [String(d.ts_code), d])
+    );
+
+    for (const code of batch) {
+      const d = (dailyMap.get(code) || {}) as Record<string, unknown>;
+      const b = (basicMap.get(code) || {}) as Record<string, unknown>;
+      // 只添加有行情数据的股票
+      if (dailyMap.has(code)) {
+        results.push({
+          ts_code: code,
+          name: nameMap.get(code) || code,
+          close: Number(d.close) || 0,
+          pct_chg: Number(d.pct_chg) || 0,
+          change: Number(d.change) || 0,
+          open: Number(d.open) || 0,
+          high: Number(d.high) || 0,
+          low: Number(d.low) || 0,
+          pre_close: Number(d.pre_close) || 0,
+          vol: Number(d.vol) || 0,
+          amount: Number(d.amount) || 0,
+          turnover_rate: Number(b.turnover_rate) || 0,
+          pe_ttm: Number(b.pe_ttm) || 0,
+          total_mv: Number(b.total_mv) || 0,
+        });
+      }
+    }
+  }
+
+  // 按涨跌幅降序
+  results.sort((a, b) => b.pct_chg - a.pct_chg);
+  return results;
+}
+
+// ===========================================
 // 导出便捷方法
 // ===========================================
+
+/**
+ * 轻量级股票搜索（用于导航栏搜索框）
+ * 搜索股票代码、名称、拼音简称，返回最多 10 条
+ */
+export async function searchStocks(keyword: string): Promise<{ ts_code: string; name: string; industry: string }[]> {
+  if (!keyword || keyword.trim().length === 0) return [];
+
+  const trimmed = keyword.trim();
+
+  try {
+    const { data, error } = await supabaseStock
+      .from('stock_basic')
+      .select('ts_code, name, industry')
+      .or(`name.ilike.%${trimmed}%,ts_code.ilike.%${trimmed}%,symbol.ilike.%${trimmed}%,cnspell.ilike.%${trimmed}%`)
+      .limit(10);
+
+    if (error) {
+      logger.warn('搜索股票失败:', error);
+      return [];
+    }
+
+    return (data || []).map((item: { ts_code: string; name: string; industry: string | null }) => ({
+      ts_code: item.ts_code,
+      name: item.name,
+      industry: item.industry || '',
+    }));
+  } catch (error) {
+    logger.error('搜索股票异常:', error);
+    return [];
+  }
+}
 
 export const stockService = {
   fetchIndices,
@@ -3425,7 +3671,6 @@ export const stockService = {
   fetchUpDownDistribution,
   fetchMarketSentiment,
   fetchNorthFlow,
-  fetchNews,
   fetchRealTimeNews,
   fetchNewsBySource,
   NEWS_SOURCES,
@@ -3435,7 +3680,6 @@ export const stockService = {
   fetchStockDetail,
   fetchStockDetailBundle,
   fetchStockFullDetail,
-  fetchStockDaily,
   fetchKLineData,
   fetchRealtimeQuote,
   fetchTimeSeriesData,
@@ -3452,9 +3696,14 @@ export const stockService = {
   fetchHotStockList,
   fetchSectorHeatmapData,
   fetchSectorHeatBundle,
+  // 板块成分股
+  fetchSectorCodeByName,
+  fetchSectorMembers,
   // 龙虎榜相关
   fetchDragonTigerList,
-  fetchDragonTigerDetail
+  fetchDragonTigerDetail,
+  // 搜索
+  searchStocks,
 };
 
 // ===========================================
@@ -3520,7 +3769,7 @@ export async function fetchDragonTigerList(params: {
       if (latestDate && latestDate.length > 0) {
         tradeDate = (latestDate[0] as { trade_date: string }).trade_date;
       } else {
-        console.warn('无法获取龙虎榜最新日期');
+        logger.warn('无法获取龙虎榜最新日期');
         return [];
       }
     }
@@ -3528,12 +3777,12 @@ export async function fetchDragonTigerList(params: {
     // 查询龙虎榜数据 - 获取所有记录（不限制数量，后续去重后再限制）
     const { data, error } = await supabaseStock
       .from('top_list')
-      .select('*')
+      .select('ts_code, name, trade_date, close, pct_change, turnover_rate, amount, l_buy, l_sell, net_amount, net_rate, reason')
       .eq('trade_date', tradeDate)
       .order('net_amount', { ascending: false });
 
     if (error) {
-      console.error('获取龙虎榜数据失败:', error);
+      logger.error('获取龙虎榜数据失败:', error);
       return [];
     }
 
@@ -3599,7 +3848,7 @@ export async function fetchDragonTigerList(params: {
     // 限制返回数量
     return result.slice(0, limit);
   } catch (error) {
-    console.error('获取龙虎榜数据异常:', error);
+    logger.error('获取龙虎榜数据异常:', error);
     return [];
   }
 }
@@ -3616,13 +3865,13 @@ export async function fetchDragonTigerDetail(
   try {
     const { data, error } = await supabaseStock
       .from('top_inst')
-      .select('*')
+      .select('trade_date, ts_code, exalter, side, buy, buy_rate, sell, sell_rate, net_buy, reason')
       .eq('ts_code', tsCode)
       .eq('trade_date', tradeDate)
       .order('net_buy', { ascending: false });
 
     if (error) {
-      console.error('获取龙虎榜机构明细失败:', error);
+      logger.error('获取龙虎榜机构明细失败:', error);
       return { buyers: [], sellers: [] };
     }
 
@@ -3647,7 +3896,7 @@ export async function fetchDragonTigerDetail(
 
     return { buyers, sellers };
   } catch (error) {
-    console.error('获取龙虎榜机构明细异常:', error);
+    logger.error('获取龙虎榜机构明细异常:', error);
     return { buyers: [], sellers: [] };
   }
 }

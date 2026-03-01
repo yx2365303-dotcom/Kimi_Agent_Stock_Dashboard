@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { TrendingUp, TrendingDown, Zap } from 'lucide-react';
@@ -13,7 +14,7 @@ interface LimitUpStatsProps {
   className?: string;
 }
 
-export function LimitUpStats({ 
+export const LimitUpStats = memo(function LimitUpStats({ 
   limitUpList, 
   limitUpCount, 
   limitDownCount, 
@@ -24,10 +25,10 @@ export function LimitUpStats({
   return (
     <Card className={cn('p-4', className)}>
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-semibold text-slate-900">涨跌停统计</h3>
+        <h3 className="text-lg font-semibold text-foreground">涨跌停统计</h3>
         <div className="flex items-center gap-1">
           <Zap className="w-4 h-4 text-yellow-600" />
-          <span className="text-sm text-slate-500">连板高度:</span>
+          <span className="text-sm text-muted-foreground">连板高度:</span>
           <span className="text-lg font-bold text-yellow-600 font-mono">{maxLimitCount}板</span>
         </div>
       </div>
@@ -36,28 +37,28 @@ export function LimitUpStats({
         <div className="bg-red-50 rounded-lg p-3 text-center">
           <div className="flex items-center justify-center gap-1 mb-1">
             <TrendingUp className="w-4 h-4 text-red-600" />
-            <span className="text-xs text-slate-500">涨停</span>
+            <span className="text-xs text-muted-foreground">涨停</span>
           </div>
           <div className="text-xl font-bold text-red-600 font-mono">{limitUpCount}</div>
         </div>
         <div className="bg-green-50 rounded-lg p-3 text-center">
           <div className="flex items-center justify-center gap-1 mb-1">
             <TrendingDown className="w-4 h-4 text-green-600" />
-            <span className="text-xs text-slate-500">跌停</span>
+            <span className="text-xs text-muted-foreground">跌停</span>
           </div>
           <div className="text-xl font-bold text-green-600 font-mono">{limitDownCount}</div>
         </div>
         <div className="bg-yellow-50 rounded-lg p-3 text-center">
           <div className="flex items-center justify-center gap-1 mb-1">
             <Zap className="w-4 h-4 text-yellow-600" />
-            <span className="text-xs text-slate-500">炸板</span>
+            <span className="text-xs text-muted-foreground">炸板</span>
           </div>
           <div className="text-xl font-bold text-yellow-600 font-mono">{brokenCount}</div>
         </div>
       </div>
 
       <div className="space-y-2">
-        <div className="grid grid-cols-[1fr_100px_80px] items-center text-sm text-slate-500 px-2">
+        <div className="grid grid-cols-[1fr_100px_80px] items-center text-sm text-muted-foreground px-2">
           <span>股票名称</span>
           <span className="text-center">涨停时间</span>
           <span className="text-right">连板</span>
@@ -67,20 +68,20 @@ export function LimitUpStats({
             {limitUpList.map((stock) => (
               <div 
                 key={stock.ts_code}
-                className="grid grid-cols-[1fr_100px_80px] items-center p-2 rounded-lg bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer"
+                className="grid grid-cols-[1fr_100px_80px] items-center p-2 rounded-lg bg-muted hover:bg-muted transition-colors cursor-pointer"
               >
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-slate-900">{stock.name}</span>
-                  <span className="text-xs text-slate-500">{stock.ts_code}</span>
+                  <span className="text-sm font-medium text-foreground">{stock.name}</span>
+                  <span className="text-xs text-muted-foreground">{stock.ts_code}</span>
                   {stock.tag && (
-                    <span className="text-xs px-1.5 py-0.5 rounded bg-slate-200 text-slate-700">
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-border text-muted-foreground">
                       {stock.tag}
                     </span>
                   )}
                 </div>
-                <span className="text-xs text-slate-500 font-mono text-center">{stock.first_time}</span>
+                <span className="text-xs text-muted-foreground font-mono text-center">{stock.first_time}</span>
                 <div className="flex items-center justify-end gap-2">
-                  <span className="text-xs text-slate-500">{stock.limit_times}板</span>
+                  <span className="text-xs text-muted-foreground">{stock.limit_times}板</span>
                   {stock.open_times > 0 && (
                     <span className="text-xs text-yellow-600">炸{stock.open_times}</span>
                   )}
@@ -92,4 +93,4 @@ export function LimitUpStats({
       </div>
     </Card>
   );
-}
+});

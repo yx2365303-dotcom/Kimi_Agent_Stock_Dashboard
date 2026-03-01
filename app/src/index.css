@@ -24,6 +24,64 @@
     --input: 220 15% 90%;
     --ring: 217 91% 50%;
     --radius: 0.5rem;
+
+    /* 股票专用语义色 */
+    --stock-up: 0 84% 47%;
+    --stock-down: 142 71% 36%;
+    --stock-flat: 215 14% 64%;
+    --stock-up-bg: 0 84% 47% / 0.1;
+    --stock-down-bg: 142 71% 36% / 0.1;
+    --stock-limit-up: 0 84% 47%;
+    --stock-limit-down: 142 71% 36%;
+
+    /* 图表色板 */
+    --chart-1: 217 91% 50%;
+    --chart-2: 0 84% 55%;
+    --chart-3: 142 71% 45%;
+    --chart-4: 38 92% 50%;
+    --chart-5: 270 67% 58%;
+    --chart-grid: 220 15% 92%;
+    --chart-text: 220 10% 45%;
+  }
+
+  .dark {
+    --background: 222 47% 8%;
+    --foreground: 210 40% 96%;
+    --card: 222 47% 11%;
+    --card-foreground: 210 40% 96%;
+    --popover: 222 47% 11%;
+    --popover-foreground: 210 40% 96%;
+    --primary: 217 91% 60%;
+    --primary-foreground: 222 47% 8%;
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 210 40% 96%;
+    --muted: 217 33% 17%;
+    --muted-foreground: 215 20% 60%;
+    --accent: 217 33% 17%;
+    --accent-foreground: 210 40% 96%;
+    --destructive: 0 62% 50%;
+    --destructive-foreground: 210 40% 96%;
+    --border: 217 33% 20%;
+    --input: 217 33% 20%;
+    --ring: 217 91% 60%;
+
+    /* 暗色模式 股票色 */
+    --stock-up: 0 84% 60%;
+    --stock-down: 142 71% 50%;
+    --stock-flat: 215 14% 55%;
+    --stock-up-bg: 0 84% 60% / 0.15;
+    --stock-down-bg: 142 71% 50% / 0.15;
+    --stock-limit-up: 0 72% 55%;
+    --stock-limit-down: 142 60% 45%;
+
+    /* 暗色图表色板 */
+    --chart-1: 217 91% 65%;
+    --chart-2: 0 72% 60%;
+    --chart-3: 142 60% 55%;
+    --chart-4: 38 92% 60%;
+    --chart-5: 270 67% 65%;
+    --chart-grid: 217 33% 18%;
+    --chart-text: 215 20% 60%;
   }
 }
 
@@ -32,7 +90,7 @@
     @apply border-border;
   }
   body {
-    @apply bg-white text-slate-900;
+    @apply bg-background text-foreground;
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   }
 }
@@ -44,16 +102,16 @@
 }
 
 ::-webkit-scrollbar-track {
-  background: #f1f5f9;
+  background: hsl(var(--muted));
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: hsl(var(--muted-foreground) / 0.3);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: hsl(var(--muted-foreground) / 0.5);
 }
 
 /* 数字字体 */
@@ -61,25 +119,32 @@
   font-family: 'JetBrains Mono', 'Fira Code', 'Roboto Mono', monospace;
 }
 
-/* 涨跌颜色 - A股标准 - 浅色背景 */
+/* 涨跌颜色 - A股标准 - 使用主题变量 */
 .text-up {
-  color: #dc2626;
+  color: hsl(var(--stock-up));
 }
 
 .text-down {
-  color: #16a34a;
+  color: hsl(var(--stock-down));
 }
 
 .bg-up {
-  background-color: rgba(220, 38, 38, 0.1);
+  background-color: hsl(var(--stock-up-bg));
 }
 
 .bg-down {
-  background-color: rgba(22, 163, 74, 0.1);
+  background-color: hsl(var(--stock-down-bg));
 }
 
 /* 选中文字颜色 */
 ::selection {
-  background-color: rgba(59, 130, 246, 0.2);
-  color: #1e293b;
+  background-color: hsl(var(--primary) / 0.2);
+  color: hsl(var(--foreground));
+}
+
+/* 暗色模式过渡动画 */
+*,
+*::before,
+*::after {
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.15s ease;
 }

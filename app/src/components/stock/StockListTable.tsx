@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import useSWR from 'swr';
-import { cn, formatNumber, getChangeColor } from '@/lib/utils';
+import { cn, formatNumber, getChangeColor, formatLargeNumber, formatVolumeHand, formatMarketCap } from '@/lib/utils';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -23,39 +23,7 @@ import {
   ArrowUp,
   ArrowDown
 } from 'lucide-react';
-import { fetchStockListWithQuotes, type StockQuoteItem } from '@/services/stockService';
-
-// 格式化大数值
-function formatLargeNumber(value: number): string {
-  if (!value) return '-';
-  // 成交额单位是千元，转换为亿
-  if (value >= 100000) {
-    return (value / 100000).toFixed(2) + '亿';
-  }
-  if (value >= 100) {
-    return (value / 100).toFixed(2) + '万';
-  }
-  return value.toFixed(2);
-}
-
-// 格式化成交量
-function formatVolume(vol: number): string {
-  if (!vol) return '-';
-  // vol 单位是手
-  if (vol >= 10000) {
-    return (vol / 10000).toFixed(2) + '万手';
-  }
-  return vol.toFixed(0) + '手';
-}
-
-// 格式化市值（万元转亿元）
-function formatMarketCap(value: number): string {
-  if (!value) return '-';
-  if (value >= 10000) {
-    return (value / 10000).toFixed(2) + '亿';
-  }
-  return value.toFixed(2) + '万';
-}
+import { fetchStockListWithQuotes, type StockQuoteItem } from '@/services/stockDetailService';
 
 type SortField = 'amount' | 'pct_chg' | 'turnover_rate' | 'total_mv';
 type SortOrder = 'asc' | 'desc';
@@ -122,7 +90,7 @@ export function StockListTable({ onSelectStock }: StockListTableProps) {
   // 排序图标
   const renderSortIcon = (field: SortField) => {
     if (sortBy !== field) {
-      return <ArrowUpDown className="w-4 h-4 ml-1 text-slate-400" />;
+      return <ArrowUpDown className="w-4 h-4 ml-1 text-muted-foreground" />;
     }
     return sortOrder === 'desc' 
       ? <ArrowDown className="w-4 h-4 ml-1 text-blue-500" />
@@ -131,10 +99,10 @@ export function StockListTable({ onSelectStock }: StockListTableProps) {
 
   // 分页组件
   const renderPagination = () => (
-    <div className="flex items-center justify-between px-4 py-3 border-t border-slate-200">
-      <div className="text-sm text-slate-600">
-        共 <span className="font-medium text-slate-900">{totalCount.toLocaleString()}</span> 只股票，
-        第 <span className="font-medium text-slate-900">{currentPage}</span> / {totalPages} 页
+    <div className="flex items-center justify-between px-4 py-3 border-t border-border">
+      <div className="text-sm text-muted-foreground">
+        共 <span className="font-medium text-foreground">{totalCount.toLocaleString()}</span> 只股票，
+        第 <span className="font-medium text-foreground">{currentPage}</span> / {totalPages} 页
       </div>
       <div className="flex items-center gap-1">
         <Button
@@ -202,10 +170,10 @@ export function StockListTable({ onSelectStock }: StockListTableProps) {
   return (
     <Card className="overflow-hidden">
       {/* 搜索栏 */}
-      <div className="p-4 border-b border-slate-200 bg-slate-50">
+      <div className="p-4 border-b border-border bg-muted">
         <div className="flex items-center gap-2">
           <div className="relative flex-1 max-w-md">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
               placeholder="搜索股票代码或名称..."
               value={searchInput}
@@ -229,8 +197,8 @@ export function StockListTable({ onSelectStock }: StockListTableProps) {
           )}
         </div>
         {keyword && (
-          <div className="mt-2 text-sm text-slate-600">
-            搜索 "<span className="font-medium text-slate-900">{keyword}</span>" 的结果：{totalCount} 只股票
+          <div className="mt-2 text-sm text-muted-foreground">
+            搜索 "<span className="font-medium text-foreground">{keyword}</span>" 的结果：{totalCount} 只股票
           </div>
         )}
       </div>
@@ -239,12 +207,12 @@ export function StockListTable({ onSelectStock }: StockListTableProps) {
       <div className="overflow-x-auto">
         <Table>
           <TableHeader>
-            <TableRow className="bg-slate-50 hover:bg-slate-50">
-              <TableHead className="w-28 font-semibold text-slate-700">代码</TableHead>
-              <TableHead className="w-24 font-semibold text-slate-700">名称</TableHead>
-              <TableHead className="w-24 text-right font-semibold text-slate-700">最新价</TableHead>
+            <TableRow className="bg-muted hover:bg-muted">
+              <TableHead className="w-28 font-semibold text-muted-foreground">代码</TableHead>
+              <TableHead className="w-24 font-semibold text-muted-foreground">名称</TableHead>
+              <TableHead className="w-24 text-right font-semibold text-muted-foreground">最新价</TableHead>
               <TableHead 
-                className="w-24 text-right font-semibold text-slate-700 cursor-pointer hover:bg-slate-100"
+                className="w-24 text-right font-semibold text-muted-foreground cursor-pointer hover:bg-muted"
                 onClick={() => handleSort('pct_chg')}
               >
                 <div className="flex items-center justify-end">
@@ -252,13 +220,13 @@ export function StockListTable({ onSelectStock }: StockListTableProps) {
                   {renderSortIcon('pct_chg')}
                 </div>
               </TableHead>
-              <TableHead className="w-24 text-right font-semibold text-slate-700">涨跌额</TableHead>
-              <TableHead className="w-24 text-right font-semibold text-slate-700">今开</TableHead>
-              <TableHead className="w-24 text-right font-semibold text-slate-700">最高</TableHead>
-              <TableHead className="w-24 text-right font-semibold text-slate-700">最低</TableHead>
-              <TableHead className="w-28 text-right font-semibold text-slate-700">成交量</TableHead>
+              <TableHead className="w-24 text-right font-semibold text-muted-foreground">涨跌额</TableHead>
+              <TableHead className="w-24 text-right font-semibold text-muted-foreground">今开</TableHead>
+              <TableHead className="w-24 text-right font-semibold text-muted-foreground">最高</TableHead>
+              <TableHead className="w-24 text-right font-semibold text-muted-foreground">最低</TableHead>
+              <TableHead className="w-28 text-right font-semibold text-muted-foreground">成交量</TableHead>
               <TableHead 
-                className="w-28 text-right font-semibold text-slate-700 cursor-pointer hover:bg-slate-100"
+                className="w-28 text-right font-semibold text-muted-foreground cursor-pointer hover:bg-muted"
                 onClick={() => handleSort('amount')}
               >
                 <div className="flex items-center justify-end">
@@ -267,7 +235,7 @@ export function StockListTable({ onSelectStock }: StockListTableProps) {
                 </div>
               </TableHead>
               <TableHead 
-                className="w-24 text-right font-semibold text-slate-700 cursor-pointer hover:bg-slate-100"
+                className="w-24 text-right font-semibold text-muted-foreground cursor-pointer hover:bg-muted"
                 onClick={() => handleSort('turnover_rate')}
               >
                 <div className="flex items-center justify-end">
@@ -275,9 +243,9 @@ export function StockListTable({ onSelectStock }: StockListTableProps) {
                   {renderSortIcon('turnover_rate')}
                 </div>
               </TableHead>
-              <TableHead className="w-24 text-right font-semibold text-slate-700">市盈率</TableHead>
+              <TableHead className="w-24 text-right font-semibold text-muted-foreground">市盈率</TableHead>
               <TableHead 
-                className="w-28 text-right font-semibold text-slate-700 cursor-pointer hover:bg-slate-100"
+                className="w-28 text-right font-semibold text-muted-foreground cursor-pointer hover:bg-muted"
                 onClick={() => handleSort('total_mv')}
               >
                 <div className="flex items-center justify-end">
@@ -309,7 +277,7 @@ export function StockListTable({ onSelectStock }: StockListTableProps) {
               ))
             ) : stocks.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={13} className="text-center py-10 text-slate-500">
+                <TableCell colSpan={13} className="text-center py-10 text-muted-foreground">
                   暂无数据
                 </TableCell>
               </TableRow>
@@ -320,8 +288,8 @@ export function StockListTable({ onSelectStock }: StockListTableProps) {
                   className="cursor-pointer hover:bg-blue-50"
                   onClick={() => onSelectStock(stock.ts_code)}
                 >
-                  <TableCell className="font-mono text-slate-700">{stock.ts_code}</TableCell>
-                  <TableCell className="font-medium text-slate-900">{stock.name}</TableCell>
+                  <TableCell className="font-mono text-muted-foreground">{stock.ts_code}</TableCell>
+                  <TableCell className="font-medium text-foreground">{stock.name}</TableCell>
                   <TableCell className={cn('text-right font-mono', getChangeColor(stock.pct_chg))}>
                     {formatNumber(stock.close)}
                   </TableCell>
@@ -340,19 +308,19 @@ export function StockListTable({ onSelectStock }: StockListTableProps) {
                   <TableCell className="text-right font-mono text-green-500">
                     {formatNumber(stock.low)}
                   </TableCell>
-                  <TableCell className="text-right font-mono text-slate-700">
-                    {formatVolume(stock.vol)}
+                  <TableCell className="text-right font-mono text-muted-foreground">
+                    {formatVolumeHand(stock.vol)}
                   </TableCell>
-                  <TableCell className="text-right font-mono text-slate-700">
+                  <TableCell className="text-right font-mono text-muted-foreground">
                     {formatLargeNumber(stock.amount)}
                   </TableCell>
-                  <TableCell className="text-right font-mono text-slate-700">
+                  <TableCell className="text-right font-mono text-muted-foreground">
                     {stock.turnover_rate.toFixed(2)}%
                   </TableCell>
-                  <TableCell className="text-right font-mono text-slate-700">
+                  <TableCell className="text-right font-mono text-muted-foreground">
                     {stock.pe_ttm > 0 ? stock.pe_ttm.toFixed(2) : '-'}
                   </TableCell>
-                  <TableCell className="text-right font-mono text-slate-700">
+                  <TableCell className="text-right font-mono text-muted-foreground">
                     {formatMarketCap(stock.total_mv)}
                   </TableCell>
                 </TableRow>

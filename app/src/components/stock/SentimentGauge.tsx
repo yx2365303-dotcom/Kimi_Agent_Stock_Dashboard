@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { cn } from '@/lib/utils';
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
 
@@ -8,7 +9,7 @@ interface SentimentGaugeProps {
     className?: string;
 }
 
-export function SentimentGauge({ score, label, trend, className }: SentimentGaugeProps) {
+export const SentimentGauge = memo(function SentimentGauge({ score, label, trend, className }: SentimentGaugeProps) {
     // 根据分数获取颜色
     const getScoreColor = (s: number) => {
         if (s >= 80) return { main: '#22c55e', bg: 'bg-green-500/10', text: 'text-green-500' };
@@ -30,7 +31,7 @@ export function SentimentGauge({ score, label, trend, className }: SentimentGaug
     return (
         <div className={cn('flex flex-col items-center p-4', className)}>
             {/* 标题 */}
-            <div className="text-sm font-medium text-slate-500 mb-2">市场情绪</div>
+            <div className="text-sm font-medium text-muted-foreground mb-2">市场情绪</div>
 
             {/* 仪表盘 */}
             <div className="relative w-32 h-32">
@@ -98,8 +99,8 @@ export function SentimentGauge({ score, label, trend, className }: SentimentGaug
                 )}
                 {trend === 'flat' && (
                     <>
-                        <Minus className="w-4 h-4 text-slate-400" />
-                        <span className="text-xs text-slate-400">情绪持平</span>
+                        <Minus className="w-4 h-4 text-muted-foreground" />
+                        <span className="text-xs text-muted-foreground">情绪持平</span>
                     </>
                 )}
             </div>
@@ -107,9 +108,9 @@ export function SentimentGauge({ score, label, trend, className }: SentimentGaug
             {/* 刻度标签 */}
             <div className="flex justify-between w-full mt-3 px-2">
                 <span className="text-[10px] text-red-500">恐惧</span>
-                <span className="text-[10px] text-slate-400">中性</span>
+                <span className="text-[10px] text-muted-foreground">中性</span>
                 <span className="text-[10px] text-green-500">贪婪</span>
             </div>
         </div>
     );
-}
+});

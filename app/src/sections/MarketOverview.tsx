@@ -10,7 +10,7 @@ import { cn, getChangeColor } from '@/lib/utils';
 import {
   fetchMarketOverviewBundle,
   type MarketOverviewBundle,
-} from '@/services/stockService';
+} from '@/services/marketService';
 
 const UpDownDistribution = lazy(() =>
   import('@/components/stock/UpDownDistribution').then((m) => ({ default: m.UpDownDistribution }))
@@ -52,13 +52,22 @@ function loadMarketOverviewSnapshot(): MarketOverviewBundle | undefined {
 function saveMarketOverviewSnapshot(data: MarketOverviewBundle): void {
   if (typeof window === 'undefined') return;
 
-  try {
-    window.localStorage.setItem(
-      MARKET_OVERVIEW_SNAPSHOT_KEY,
-      JSON.stringify({ savedAt: Date.now(), data })
-    );
-  } catch {
-    // ignore storage quota errors
+  // 使用 requestIdleCallback 避免 JSON.stringify 阻塞主线程
+  const save = () => {
+    try {
+      const json = JSON.stringify({ savedAt: Date.now(), data });
+      // 限制 localStorage 快照大小为 512KB，避免写入过大数据
+      if (json.length > 512 * 1024) return;
+      window.localStorage.setItem(MARKET_OVERVIEW_SNAPSHOT_KEY, json);
+    } catch {
+      // ignore storage quota errors
+    }
+  };
+
+  if ('requestIdleCallback' in window) {
+    window.requestIdleCallback(save, { timeout: 2000 });
+  } else {
+    setTimeout(save, 100);
   }
 }
 
@@ -104,8 +113,8 @@ export function MarketOverview() {
     return (
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-xl font-bold text-slate-900">市场概览</h2>
-          <div className="text-sm text-slate-500">正在加载数据...</div>
+          <h2 className="text-xl font-bold text-foreground">市场概览</h2>
+          <div className="text-sm text-muted-foreground">正在加载数据...</div>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
           {Array.from({ length: 5 }).map((_, i) => (
@@ -124,9 +133,9 @@ export function MarketOverview() {
     <div className="space-y-4">
       {/* 更新时间 */}
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold text-slate-900">市场概览</h2>
+        <h2 className="text-xl font-bold text-foreground">市场概览</h2>
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1 text-sm text-slate-500">
+          <div className="flex items-center gap-1 text-sm text-muted-foreground">
             <Clock className="w-4 h-4" />
             <span>更新时间: {updateTime}</span>
           </div>
@@ -149,7 +158,7 @@ export function MarketOverview() {
             <IndexCard key={index.code} data={index} />
           ))
         ) : (
-          <div className="col-span-5 text-center py-8 text-slate-500">
+          <div className="col-span-5 text-center py-8 text-muted-foreground">
             暂无指数数据
           </div>
         )}
@@ -161,9 +170,9 @@ export function MarketOverview() {
           {upDownDistribution ? (
             <UpDownDistribution data={upDownDistribution} className="min-h-[480px]" />
           ) : (
-            <Card className="p-4 border-slate-200 min-h-[480px]">
-              <h3 className="text-lg font-semibold text-slate-900 mb-4">涨跌分布</h3>
-              <div className="h-48 flex items-center justify-center text-slate-500">
+            <Card className="p-4 border-border min-h-[480px]">
+              <h3 className="text-lg font-semibold text-foreground mb-4">涨跌分布</h3>
+              <div className="h-48 flex items-center justify-center text-muted-foreground">
                 暂无数据
               </div>
             </Card>
@@ -173,9 +182,9 @@ export function MarketOverview() {
           {northFlow ? (
             <MoneyFlowChart data={northFlow} className="min-h-[480px]" />
           ) : (
-            <Card className="p-4 border-slate-200 min-h-[480px]">
-              <h3 className="text-lg font-semibold text-slate-900 mb-4">北向资金流向</h3>
-              <div className="h-48 flex items-center justify-center text-slate-500">
+            <Card className="p-4 border-border min-h-[480px]">
+              <h3 className="text-lg font-semibold text-foreground mb-4">北向资金流向</h3>
+              <div className="h-48 flex items-center justify-center text-muted-foreground">
                 暂无数据
               </div>
             </Card>
@@ -203,9 +212,9 @@ export function MarketOverview() {
             maxLimitCount={enhancedSentiment?.limitStats.maxLianban ?? 0}
           />
         ) : (
-          <Card className="p-4 border-slate-200">
-            <h3 className="text-lg font-semibold text-slate-900 mb-4">涨跌停统计</h3>
-            <div className="h-48 flex items-center justify-center text-slate-500">
+          <Card className="p-4 border-border">
+            <h3 className="text-lg font-semibold text-foreground mb-4">涨跌停统计</h3>
+            <div className="h-48 flex items-center justify-center text-muted-foreground">
               暂无数据
             </div>
           </Card>
@@ -227,29 +236,29 @@ export function MarketOverview() {
       </div>
 
       {/* 沪深股通 Top10 */}
-      <Card className="p-4 border-slate-200">
-        <h3 className="text-lg font-semibold text-slate-900 mb-4">沪深股通 Top10</h3>
+      <Card className="p-4 border-border">
+        <h3 className="text-lg font-semibold text-foreground mb-4">沪深股通 Top10</h3>
         {hsgtTop10.length > 0 ? (
           <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
             {hsgtTop10.slice(0, 10).map((item, index) => (
               <div
                 key={item.ts_code}
-                className="p-3 rounded-lg bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer"
+                className="p-3 rounded-lg bg-muted hover:bg-accent transition-colors cursor-pointer"
               >
                 <div className="flex items-center gap-2 mb-2">
                   <span className={cn(
                     'w-5 h-5 flex items-center justify-center text-xs font-bold rounded',
-                    index < 3 ? 'bg-yellow-100 text-yellow-700' : 'text-slate-500'
+                    index < 3 ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/50 dark:text-yellow-400' : 'text-muted-foreground'
                   )}>
                     {index + 1}
                   </span>
-                  <span className="text-sm font-medium text-slate-900 truncate">{item.name}</span>
+                  <span className="text-sm font-medium text-foreground truncate">{item.name}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className={cn('text-sm font-mono font-medium', getChangeColor(item.change))}>
                     {item.change >= 0 ? '+' : ''}{item.change.toFixed(2)}%
                   </span>
-                  <span className="text-xs text-slate-500 font-mono">
+                  <span className="text-xs text-muted-foreground font-mono">
                     {(item.amount / 100000000).toFixed(1)}亿
                   </span>
                 </div>
@@ -257,7 +266,7 @@ export function MarketOverview() {
             ))}
           </div>
         ) : (
-          <div className="h-32 flex items-center justify-center text-slate-500">
+          <div className="h-32 flex items-center justify-center text-muted-foreground">
             暂无数据
           </div>
         )}

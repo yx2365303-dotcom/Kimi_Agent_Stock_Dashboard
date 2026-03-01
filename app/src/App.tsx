@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState } from 'react';
+import { Suspense, lazy, useState, useCallback } from 'react';
 import { Navigation } from '@/components/Navigation';
 import { Toaster } from '@/components/ui/sonner';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -33,15 +33,22 @@ function SectionFallback() {
 
 function App() {
   const [activeTab, setActiveTab] = useState('market');
+  const [selectedStockCode, setSelectedStockCode] = useState<string | null>(null);
+
+  // 从其他模块跳转到个股详情
+  const handleSelectStock = useCallback((tsCode: string) => {
+    setSelectedStockCode(tsCode);
+    setActiveTab('stock');
+  }, []);
 
   const renderContent = () => {
     switch (activeTab) {
       case 'market':
         return <MarketOverview />;
       case 'stock':
-        return <StockDetail />;
+        return <StockDetail initialStockCode={selectedStockCode} />;
       case 'sector':
-        return <SectorHeat />;
+        return <SectorHeat onSelectStock={handleSelectStock} />;
       case 'dragon':
         return <DragonTigerPage />;
       case 'screener':
@@ -56,8 +63,8 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-white">
-      <Navigation activeTab={activeTab} onTabChange={setActiveTab} />
+    <div className="min-h-screen bg-background text-foreground">
+      <Navigation activeTab={activeTab} onTabChange={setActiveTab} onSelectStock={handleSelectStock} />
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         <Suspense fallback={<SectionFallback />}>
           {renderContent()}

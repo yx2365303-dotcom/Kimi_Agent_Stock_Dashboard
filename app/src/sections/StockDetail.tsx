@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import useSWR from 'swr';
 import { KLineChart } from '@/components/chart/KLineChart';
 import { TimeSeriesChart } from '@/components/chart/TimeSeriesChart';
 import { StockListTable } from '@/components/stock/StockListTable';
-import { cn, formatNumber, getChangeColor } from '@/lib/utils';
+import { cn, formatNumber, getChangeColor, formatLargeNumber, formatVolumeHand } from '@/lib/utils';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -18,39 +18,7 @@ import {
   Newspaper,
   ArrowLeft
 } from 'lucide-react';
-import { fetchStockDetailBundle } from '@/services/stockService';
-
-// 格式化大数值（万元转为亿元等）
-function formatLargeNumber(value: number, unit: 'wan' | 'qianwan' = 'wan'): string {
-  if (!value) return '-';
-  if (unit === 'wan') {
-    // 万元，转换为亿
-    if (value >= 10000) {
-      return (value / 10000).toFixed(2) + '亿';
-    }
-    return value.toFixed(2) + '万';
-  }
-  if (unit === 'qianwan') {
-    // 千元，转换为亿
-    if (value >= 100000) {
-      return (value / 100000).toFixed(2) + '亿';
-    }
-    return (value / 100).toFixed(2) + '万';
-  }
-  return value.toFixed(2);
-}
-
-// 格式化成交量
-function formatVolume(vol: number): string {
-  if (!vol) return '-';
-  if (vol >= 10000) {
-    return (vol / 10000).toFixed(2) + '亿手';
-  }
-  if (vol >= 100) {
-    return (vol / 100).toFixed(2) + '万手';
-  }
-  return vol.toFixed(0) + '手';
-}
+import { fetchStockDetailBundle } from '@/services/stockDetailService';
 
 interface StockDetailData {
   ts_code: string;
@@ -173,7 +141,7 @@ function StockDetailView({
           <ArrowLeft className="w-4 h-4" />
           返回列表
         </Button>
-        <div className="text-center py-20 text-slate-500">
+        <div className="text-center py-20 text-muted-foreground">
           未找到股票数据
         </div>
       </div>
@@ -196,27 +164,27 @@ function StockDetailView({
           <div className="flex items-center gap-4">
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-xl font-bold text-slate-900">{stockData.name}</h2>
-                <span className="text-sm text-slate-600">{stockData.ts_code}</span>
+                <h2 className="text-xl font-bold text-foreground">{stockData.name}</h2>
+                <span className="text-sm text-muted-foreground">{stockData.ts_code}</span>
               </div>
               <div className="flex items-center gap-2 mt-1">
-                <span className="text-xs px-2 py-0.5 rounded bg-slate-200 text-slate-700">{stockData.industry}</span>
-                <span className="text-xs px-2 py-0.5 rounded bg-slate-200 text-slate-700">{stockData.market}</span>
+                <span className="text-xs px-2 py-0.5 rounded bg-border text-muted-foreground">{stockData.industry}</span>
+                <span className="text-xs px-2 py-0.5 rounded bg-border text-muted-foreground">{stockData.market}</span>
               </div>
             </div>
             <div className="flex items-center gap-1">
               <Button
                 variant="ghost"
                 size="icon"
-                className="text-slate-400 hover:text-yellow-400"
+                className="text-muted-foreground hover:text-yellow-400"
                 onClick={() => setIsFavorited(!isFavorited)}
               >
                 <Star className={cn('w-5 h-5', isFavorited && 'fill-yellow-400 text-yellow-400')} />
               </Button>
-              <Button variant="ghost" size="icon" className="text-slate-400 hover:text-slate-600">
+              <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-muted-foreground">
                 <Bell className="w-5 h-5" />
               </Button>
-              <Button variant="ghost" size="icon" className="text-slate-400 hover:text-slate-600">
+              <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-muted-foreground">
                 <Share2 className="w-5 h-5" />
               </Button>
             </div>
@@ -238,40 +206,40 @@ function StockDetailView({
         </div>
 
         {/* 关键数据 */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-4 mt-4 pt-4 border-t border-slate-200">
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-4 mt-4 pt-4 border-t border-border">
           <div>
-            <div className="text-xs text-slate-600">今开</div>
+            <div className="text-xs text-muted-foreground">今开</div>
             <div className={cn('text-sm font-mono', getChangeColor(stockData.open - preClose))}>
               {formatNumber(stockData.open)}
             </div>
           </div>
           <div>
-            <div className="text-xs text-slate-600">最高</div>
+            <div className="text-xs text-muted-foreground">最高</div>
             <div className="text-sm font-mono text-red-500">{formatNumber(stockData.high)}</div>
           </div>
           <div>
-            <div className="text-xs text-slate-600">最低</div>
+            <div className="text-xs text-muted-foreground">最低</div>
             <div className="text-sm font-mono text-green-500">{formatNumber(stockData.low)}</div>
           </div>
           <div>
-            <div className="text-xs text-slate-600">昨收</div>
-            <div className="text-sm font-mono text-slate-900">{formatNumber(preClose)}</div>
+            <div className="text-xs text-muted-foreground">昨收</div>
+            <div className="text-sm font-mono text-foreground">{formatNumber(preClose)}</div>
           </div>
           <div>
-            <div className="text-xs text-slate-600">成交量</div>
-            <div className="text-sm font-mono text-slate-900">{formatVolume(stockData.vol)}</div>
+            <div className="text-xs text-muted-foreground">成交量</div>
+            <div className="text-sm font-mono text-foreground">{formatVolumeHand(stockData.vol)}</div>
           </div>
           <div>
-            <div className="text-xs text-slate-600">成交额</div>
-            <div className="text-sm font-mono text-slate-900">{formatLargeNumber(stockData.amount, 'qianwan')}</div>
+            <div className="text-xs text-muted-foreground">成交额</div>
+            <div className="text-sm font-mono text-foreground">{formatLargeNumber(stockData.amount, 'qian')}</div>
           </div>
           <div>
-            <div className="text-xs text-slate-600">换手率</div>
-            <div className="text-sm font-mono text-slate-900">{stockData.turnover_rate?.toFixed(2) || '-'}%</div>
+            <div className="text-xs text-muted-foreground">换手率</div>
+            <div className="text-sm font-mono text-foreground">{stockData.turnover_rate?.toFixed(2) || '-'}%</div>
           </div>
           <div>
-            <div className="text-xs text-slate-600">市盈率</div>
-            <div className="text-sm font-mono text-slate-900">{stockData.pe_ttm?.toFixed(2) || '-'}</div>
+            <div className="text-xs text-muted-foreground">市盈率</div>
+            <div className="text-sm font-mono text-foreground">{stockData.pe_ttm?.toFixed(2) || '-'}</div>
           </div>
         </div>
       </Card>
@@ -308,12 +276,13 @@ function StockDetailView({
               className="h-96"
               stockName={stockData.name}
               stockCode={stockData.ts_code}
+              tradeDate={stockData.trade_date}
             />
           ) : (
             kLineData.length > 0 ? (
               <KLineChart data={kLineData} className="h-96" />
             ) : (
-              <div className="h-96 flex items-center justify-center text-slate-500">
+              <div className="h-96 flex items-center justify-center text-muted-foreground">
                 暂无K线数据
               </div>
             )
@@ -324,42 +293,42 @@ function StockDetailView({
         <div className="space-y-4">
           {/* 行情概览 */}
           <Card className="p-4">
-            <h3 className="text-sm font-medium text-slate-900 mb-3">行情概览</h3>
+            <h3 className="text-sm font-medium text-foreground mb-3">行情概览</h3>
             <div className="space-y-2">
               <div className="flex justify-between text-sm">
-                <span className="text-slate-600">量比</span>
-                <span className="font-mono text-slate-900">{stockData.volume_ratio?.toFixed(2) || '-'}</span>
+                <span className="text-muted-foreground">量比</span>
+                <span className="font-mono text-foreground">{stockData.volume_ratio?.toFixed(2) || '-'}</span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-slate-600">换手率(自由流通)</span>
-                <span className="font-mono text-slate-900">{stockData.turnover_rate_f?.toFixed(2) || '-'}%</span>
+                <span className="text-muted-foreground">换手率(自由流通)</span>
+                <span className="font-mono text-foreground">{stockData.turnover_rate_f?.toFixed(2) || '-'}%</span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-slate-600">市盈率(静态)</span>
-                <span className="font-mono text-slate-900">{stockData.pe?.toFixed(2) || '-'}</span>
+                <span className="text-muted-foreground">市盈率(静态)</span>
+                <span className="font-mono text-foreground">{stockData.pe?.toFixed(2) || '-'}</span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-slate-600">市盈率(TTM)</span>
-                <span className="font-mono text-slate-900">{stockData.pe_ttm?.toFixed(2) || '-'}</span>
+                <span className="text-muted-foreground">市盈率(TTM)</span>
+                <span className="font-mono text-foreground">{stockData.pe_ttm?.toFixed(2) || '-'}</span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-slate-600">市净率</span>
-                <span className="font-mono text-slate-900">{stockData.pb?.toFixed(2) || '-'}</span>
+                <span className="text-muted-foreground">市净率</span>
+                <span className="font-mono text-foreground">{stockData.pb?.toFixed(2) || '-'}</span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-slate-600">股息率</span>
-                <span className="font-mono text-slate-900">{stockData.dv_ttm?.toFixed(2) || '-'}%</span>
+                <span className="text-muted-foreground">股息率</span>
+                <span className="font-mono text-foreground">{stockData.dv_ttm?.toFixed(2) || '-'}%</span>
               </div>
             </div>
           </Card>
 
           {/* 资金流向 */}
           <Card className="p-4">
-            <h3 className="text-sm font-medium text-slate-900 mb-3">今日资金流向</h3>
+            <h3 className="text-sm font-medium text-foreground mb-3">今日资金流向</h3>
             {moneyFlowData.length > 0 ? (
               <div className="space-y-2">
                 <div className="flex justify-between text-sm">
-                  <span className="text-slate-600">主力净流入</span>
+                  <span className="text-muted-foreground">主力净流入</span>
                   <span className={cn(
                     'font-mono font-medium',
                     (moneyFlowData[0].net_main_amount || 0) > 0 ? 'text-red-500' : 'text-green-500'
@@ -369,7 +338,7 @@ function StockDetailView({
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-slate-600">特大单净流入</span>
+                  <span className="text-muted-foreground">特大单净流入</span>
                   <span className={cn(
                     'font-mono',
                     (moneyFlowData[0].net_elg_amount || 0) > 0 ? 'text-red-500' : 'text-green-500'
@@ -379,7 +348,7 @@ function StockDetailView({
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-slate-600">大单净流入</span>
+                  <span className="text-muted-foreground">大单净流入</span>
                   <span className={cn(
                     'font-mono',
                     (moneyFlowData[0].net_lg_amount || 0) > 0 ? 'text-red-500' : 'text-green-500'
@@ -389,7 +358,7 @@ function StockDetailView({
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-slate-600">中单净流入</span>
+                  <span className="text-muted-foreground">中单净流入</span>
                   <span className={cn(
                     'font-mono',
                     (moneyFlowData[0].net_md_amount || 0) > 0 ? 'text-red-500' : 'text-green-500'
@@ -399,7 +368,7 @@ function StockDetailView({
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-slate-600">小单净流入</span>
+                  <span className="text-muted-foreground">小单净流入</span>
                   <span className={cn(
                     'font-mono',
                     (moneyFlowData[0].net_sm_amount || 0) > 0 ? 'text-red-500' : 'text-green-500'
@@ -410,7 +379,7 @@ function StockDetailView({
                 </div>
               </div>
             ) : (
-              <div className="text-sm text-slate-500 text-center py-4">暂无资金流向数据</div>
+              <div className="text-sm text-muted-foreground text-center py-4">暂无资金流向数据</div>
             )}
           </Card>
         </div>
@@ -418,7 +387,7 @@ function StockDetailView({
 
       {/* Tab内容 */}
       <Tabs defaultValue="fundamental" className="w-full">
-        <TabsList className="w-full justify-start bg-slate-100">
+        <TabsList className="w-full justify-start bg-muted">
           <TabsTrigger value="fundamental" className="data-[state=active]:bg-white">
             <FileText className="w-4 h-4 mr-1" />
             基本面
@@ -440,37 +409,37 @@ function StockDetailView({
         <TabsContent value="fundamental" className="mt-4">
           <Card className="p-4">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <div className="bg-slate-50 rounded-lg p-3">
-                <div className="text-xs text-slate-600">总市值</div>
-                <div className="text-lg font-mono text-slate-900">{formatLargeNumber(stockData.total_mv || 0, 'wan')}</div>
+              <div className="bg-muted rounded-lg p-3">
+                <div className="text-xs text-muted-foreground">总市值</div>
+                <div className="text-lg font-mono text-foreground">{formatLargeNumber(stockData.total_mv || 0, 'wan')}</div>
               </div>
-              <div className="bg-slate-50 rounded-lg p-3">
-                <div className="text-xs text-slate-600">流通市值</div>
-                <div className="text-lg font-mono text-slate-900">{formatLargeNumber(stockData.circ_mv || 0, 'wan')}</div>
+              <div className="bg-muted rounded-lg p-3">
+                <div className="text-xs text-muted-foreground">流通市值</div>
+                <div className="text-lg font-mono text-foreground">{formatLargeNumber(stockData.circ_mv || 0, 'wan')}</div>
               </div>
-              <div className="bg-slate-50 rounded-lg p-3">
-                <div className="text-xs text-slate-600">市盈率(TTM)</div>
-                <div className="text-lg font-mono text-slate-900">{stockData.pe_ttm?.toFixed(2) || '-'}</div>
+              <div className="bg-muted rounded-lg p-3">
+                <div className="text-xs text-muted-foreground">市盈率(TTM)</div>
+                <div className="text-lg font-mono text-foreground">{stockData.pe_ttm?.toFixed(2) || '-'}</div>
               </div>
-              <div className="bg-slate-50 rounded-lg p-3">
-                <div className="text-xs text-slate-600">市净率</div>
-                <div className="text-lg font-mono text-slate-900">{stockData.pb?.toFixed(2) || '-'}</div>
+              <div className="bg-muted rounded-lg p-3">
+                <div className="text-xs text-muted-foreground">市净率</div>
+                <div className="text-lg font-mono text-foreground">{stockData.pb?.toFixed(2) || '-'}</div>
               </div>
-              <div className="bg-slate-50 rounded-lg p-3">
-                <div className="text-xs text-slate-600">市销率(TTM)</div>
-                <div className="text-lg font-mono text-slate-900">{stockData.ps_ttm?.toFixed(2) || '-'}</div>
+              <div className="bg-muted rounded-lg p-3">
+                <div className="text-xs text-muted-foreground">市销率(TTM)</div>
+                <div className="text-lg font-mono text-foreground">{stockData.ps_ttm?.toFixed(2) || '-'}</div>
               </div>
-              <div className="bg-slate-50 rounded-lg p-3">
-                <div className="text-xs text-slate-600">股息率</div>
-                <div className="text-lg font-mono text-slate-900">{stockData.dv_ratio?.toFixed(2) || '-'}%</div>
+              <div className="bg-muted rounded-lg p-3">
+                <div className="text-xs text-muted-foreground">股息率</div>
+                <div className="text-lg font-mono text-foreground">{stockData.dv_ratio?.toFixed(2) || '-'}%</div>
               </div>
-              <div className="bg-slate-50 rounded-lg p-3">
-                <div className="text-xs text-slate-600">股息率(TTM)</div>
-                <div className="text-lg font-mono text-slate-900">{stockData.dv_ttm?.toFixed(2) || '-'}%</div>
+              <div className="bg-muted rounded-lg p-3">
+                <div className="text-xs text-muted-foreground">股息率(TTM)</div>
+                <div className="text-lg font-mono text-foreground">{stockData.dv_ttm?.toFixed(2) || '-'}%</div>
               </div>
-              <div className="bg-slate-50 rounded-lg p-3">
-                <div className="text-xs text-slate-600">量比</div>
-                <div className="text-lg font-mono text-slate-900">{stockData.volume_ratio?.toFixed(2) || '-'}</div>
+              <div className="bg-muted rounded-lg p-3">
+                <div className="text-xs text-muted-foreground">量比</div>
+                <div className="text-lg font-mono text-foreground">{stockData.volume_ratio?.toFixed(2) || '-'}</div>
               </div>
             </div>
           </Card>
@@ -479,37 +448,37 @@ function StockDetailView({
         <TabsContent value="financial" className="mt-4">
           <Card className="p-4">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <div className="bg-slate-50 rounded-lg p-3">
-                <div className="text-xs text-slate-600">总股本</div>
-                <div className="text-lg font-mono text-slate-900">{formatLargeNumber(stockData.total_share || 0, 'wan')}股</div>
+              <div className="bg-muted rounded-lg p-3">
+                <div className="text-xs text-muted-foreground">总股本</div>
+                <div className="text-lg font-mono text-foreground">{formatLargeNumber(stockData.total_share || 0, 'wan')}股</div>
               </div>
-              <div className="bg-slate-50 rounded-lg p-3">
-                <div className="text-xs text-slate-600">流通股本</div>
-                <div className="text-lg font-mono text-slate-900">{formatLargeNumber(stockData.float_share || 0, 'wan')}股</div>
+              <div className="bg-muted rounded-lg p-3">
+                <div className="text-xs text-muted-foreground">流通股本</div>
+                <div className="text-lg font-mono text-foreground">{formatLargeNumber(stockData.float_share || 0, 'wan')}股</div>
               </div>
-              <div className="bg-slate-50 rounded-lg p-3">
-                <div className="text-xs text-slate-600">自由流通股</div>
-                <div className="text-lg font-mono text-slate-900">{formatLargeNumber(stockData.free_share || 0, 'wan')}股</div>
+              <div className="bg-muted rounded-lg p-3">
+                <div className="text-xs text-muted-foreground">自由流通股</div>
+                <div className="text-lg font-mono text-foreground">{formatLargeNumber(stockData.free_share || 0, 'wan')}股</div>
               </div>
-              <div className="bg-slate-50 rounded-lg p-3">
-                <div className="text-xs text-slate-600">换手率</div>
-                <div className="text-lg font-mono text-slate-900">{stockData.turnover_rate?.toFixed(2) || '-'}%</div>
+              <div className="bg-muted rounded-lg p-3">
+                <div className="text-xs text-muted-foreground">换手率</div>
+                <div className="text-lg font-mono text-foreground">{stockData.turnover_rate?.toFixed(2) || '-'}%</div>
               </div>
-              <div className="bg-slate-50 rounded-lg p-3">
-                <div className="text-xs text-slate-600">换手率(自由流通)</div>
-                <div className="text-lg font-mono text-slate-900">{stockData.turnover_rate_f?.toFixed(2) || '-'}%</div>
+              <div className="bg-muted rounded-lg p-3">
+                <div className="text-xs text-muted-foreground">换手率(自由流通)</div>
+                <div className="text-lg font-mono text-foreground">{stockData.turnover_rate_f?.toFixed(2) || '-'}%</div>
               </div>
-              <div className="bg-slate-50 rounded-lg p-3">
-                <div className="text-xs text-slate-600">总市值</div>
-                <div className="text-lg font-mono text-slate-900">{formatLargeNumber(stockData.total_mv || 0, 'wan')}</div>
+              <div className="bg-muted rounded-lg p-3">
+                <div className="text-xs text-muted-foreground">总市值</div>
+                <div className="text-lg font-mono text-foreground">{formatLargeNumber(stockData.total_mv || 0, 'wan')}</div>
               </div>
-              <div className="bg-slate-50 rounded-lg p-3">
-                <div className="text-xs text-slate-600">流通市值</div>
-                <div className="text-lg font-mono text-slate-900">{formatLargeNumber(stockData.circ_mv || 0, 'wan')}</div>
+              <div className="bg-muted rounded-lg p-3">
+                <div className="text-xs text-muted-foreground">流通市值</div>
+                <div className="text-lg font-mono text-foreground">{formatLargeNumber(stockData.circ_mv || 0, 'wan')}</div>
               </div>
-              <div className="bg-slate-50 rounded-lg p-3">
-                <div className="text-xs text-slate-600">数据日期</div>
-                <div className="text-lg font-mono text-slate-900">{stockData.trade_date || '-'}</div>
+              <div className="bg-muted rounded-lg p-3">
+                <div className="text-xs text-muted-foreground">数据日期</div>
+                <div className="text-lg font-mono text-foreground">{stockData.trade_date || '-'}</div>
               </div>
             </div>
           </Card>
@@ -517,24 +486,24 @@ function StockDetailView({
 
         <TabsContent value="capital" className="mt-4">
           <Card className="p-4">
-            <h3 className="text-lg font-semibold text-slate-900 mb-4">近5日资金流向</h3>
+            <h3 className="text-lg font-semibold text-foreground mb-4">近5日资金流向</h3>
             {moneyFlowData.length > 0 ? (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="border-b border-slate-200">
-                      <th className="text-left py-2 px-3 text-slate-600 font-medium">日期</th>
-                      <th className="text-right py-2 px-3 text-slate-600 font-medium">主力净流入</th>
-                      <th className="text-right py-2 px-3 text-slate-600 font-medium">特大单</th>
-                      <th className="text-right py-2 px-3 text-slate-600 font-medium">大单</th>
-                      <th className="text-right py-2 px-3 text-slate-600 font-medium">中单</th>
-                      <th className="text-right py-2 px-3 text-slate-600 font-medium">小单</th>
+                    <tr className="border-b border-border">
+                      <th className="text-left py-2 px-3 text-muted-foreground font-medium">日期</th>
+                      <th className="text-right py-2 px-3 text-muted-foreground font-medium">主力净流入</th>
+                      <th className="text-right py-2 px-3 text-muted-foreground font-medium">特大单</th>
+                      <th className="text-right py-2 px-3 text-muted-foreground font-medium">大单</th>
+                      <th className="text-right py-2 px-3 text-muted-foreground font-medium">中单</th>
+                      <th className="text-right py-2 px-3 text-muted-foreground font-medium">小单</th>
                     </tr>
                   </thead>
                   <tbody>
                     {moneyFlowData.map((flow) => (
-                      <tr key={flow.trade_date} className="border-b border-slate-100 hover:bg-slate-50">
-                        <td className="py-2 px-3 text-slate-900">{flow.trade_date}</td>
+                      <tr key={flow.trade_date} className="border-b border-border hover:bg-muted">
+                        <td className="py-2 px-3 text-foreground">{flow.trade_date}</td>
                         <td className={cn(
                           'py-2 px-3 text-right font-mono',
                           (flow.net_main_amount || 0) > 0 ? 'text-red-500' : 'text-green-500'
@@ -571,7 +540,7 @@ function StockDetailView({
                 </table>
               </div>
             ) : (
-              <div className="text-center text-slate-500 py-8">
+              <div className="text-center text-muted-foreground py-8">
                 暂无资金流向数据
               </div>
             )}
@@ -581,29 +550,29 @@ function StockDetailView({
         <TabsContent value="news" className="mt-4">
           <Card className="p-4">
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-              <div className="bg-slate-50 rounded-lg p-3">
-                <div className="text-xs text-slate-600">所属行业</div>
-                <div className="text-lg font-medium text-slate-900">{stockData.industry || '-'}</div>
+              <div className="bg-muted rounded-lg p-3">
+                <div className="text-xs text-muted-foreground">所属行业</div>
+                <div className="text-lg font-medium text-foreground">{stockData.industry || '-'}</div>
               </div>
-              <div className="bg-slate-50 rounded-lg p-3">
-                <div className="text-xs text-slate-600">所属地区</div>
-                <div className="text-lg font-medium text-slate-900">{stockData.area || '-'}</div>
+              <div className="bg-muted rounded-lg p-3">
+                <div className="text-xs text-muted-foreground">所属地区</div>
+                <div className="text-lg font-medium text-foreground">{stockData.area || '-'}</div>
               </div>
-              <div className="bg-slate-50 rounded-lg p-3">
-                <div className="text-xs text-slate-600">上市板块</div>
-                <div className="text-lg font-medium text-slate-900">{stockData.market || '-'}</div>
+              <div className="bg-muted rounded-lg p-3">
+                <div className="text-xs text-muted-foreground">上市板块</div>
+                <div className="text-lg font-medium text-foreground">{stockData.market || '-'}</div>
               </div>
-              <div className="bg-slate-50 rounded-lg p-3">
-                <div className="text-xs text-slate-600">上市日期</div>
-                <div className="text-lg font-mono text-slate-900">{stockData.list_date || '-'}</div>
+              <div className="bg-muted rounded-lg p-3">
+                <div className="text-xs text-muted-foreground">上市日期</div>
+                <div className="text-lg font-mono text-foreground">{stockData.list_date || '-'}</div>
               </div>
-              <div className="bg-slate-50 rounded-lg p-3">
-                <div className="text-xs text-slate-600">股票代码</div>
-                <div className="text-lg font-mono text-slate-900">{stockData.ts_code}</div>
+              <div className="bg-muted rounded-lg p-3">
+                <div className="text-xs text-muted-foreground">股票代码</div>
+                <div className="text-lg font-mono text-foreground">{stockData.ts_code}</div>
               </div>
-              <div className="bg-slate-50 rounded-lg p-3">
-                <div className="text-xs text-slate-600">证券代码</div>
-                <div className="text-lg font-mono text-slate-900">{stockData.symbol}</div>
+              <div className="bg-muted rounded-lg p-3">
+                <div className="text-xs text-muted-foreground">证券代码</div>
+                <div className="text-lg font-mono text-foreground">{stockData.symbol}</div>
               </div>
             </div>
           </Card>
@@ -614,8 +583,15 @@ function StockDetailView({
 }
 
 // 主组件：股票列表 + 详情切换
-export function StockDetail() {
-  const [selectedStock, setSelectedStock] = useState<string | null>(null);
+export function StockDetail({ initialStockCode }: { initialStockCode?: string | null }) {
+  const [selectedStock, setSelectedStock] = useState<string | null>(initialStockCode ?? null);
+
+  // 当外部传入的 initialStockCode 变化时同步更新
+  useEffect(() => {
+    if (initialStockCode) {
+      setSelectedStock(initialStockCode);
+    }
+  }, [initialStockCode]);
 
   // 如果选中了股票，显示详情页
   if (selectedStock) {
@@ -631,8 +607,8 @@ export function StockDetail() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold text-slate-900">全部股票行情</h2>
-        <div className="text-sm text-slate-500">
+        <h2 className="text-xl font-bold text-foreground">全部股票行情</h2>
+        <div className="text-sm text-muted-foreground">
           点击任意股票查看详情
         </div>
       </div>

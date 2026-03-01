@@ -1,8 +1,28 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { BarChart3 } from 'lucide-react';
-import * as echarts from 'echarts';
+import * as echarts from 'echarts/core';
+import { CandlestickChart, BarChart as EBarChart } from 'echarts/charts';
+import {
+  GridComponent,
+  TooltipComponent,
+  DataZoomComponent,
+  DataZoomInsideComponent,
+  DataZoomSliderComponent,
+} from 'echarts/components';
+import { CanvasRenderer } from 'echarts/renderers';
+
+echarts.use([
+  CandlestickChart,
+  EBarChart,
+  GridComponent,
+  TooltipComponent,
+  DataZoomComponent,
+  DataZoomInsideComponent,
+  DataZoomSliderComponent,
+  CanvasRenderer,
+]);
 
 interface KLineData {
   date: string;
@@ -18,31 +38,110 @@ interface KLineChartProps {
   className?: string;
 }
 
+// 聚合日K为周K / 月K
+function aggregateKLine(data: KLineData[], period: 'day' | 'week' | 'month'): KLineData[] {
+  if (period === 'day' || data.length === 0) return data;
+
+  const groups: KLineData[][] = [];
+  let currentGroup: KLineData[] = [];
+
+  for (const item of data) {
+    const d = new Date(item.date.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3'));
+    if (currentGroup.length === 0) {
+      currentGroup.push(item);
+      continue;
+    }
+
+    const prevDate = new Date(currentGroup[0].date.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3'));
+    let isSameGroup = false;
+
+    if (period === 'week') {
+      // 同一周：取 ISO week
+      const getWeek = (dt: Date) => {
+        const start = new Date(dt.getFullYear(), 0, 1);
+        return Math.ceil(((dt.getTime() - start.getTime()) / 86400000 + start.getDay() + 1) / 7);
+      };
+      isSameGroup = d.getFullYear() === prevDate.getFullYear() && getWeek(d) === getWeek(prevDate);
+    } else {
+      isSameGroup = d.getFullYear() === prevDate.getFullYear() && d.getMonth() === prevDate.getMonth();
+    }
+
+    if (isSameGroup) {
+      currentGroup.push(item);
+    } else {
+      groups.push(currentGroup);
+      currentGroup = [item];
+    }
+  }
+  if (currentGroup.length > 0) groups.push(currentGroup);
+
+  return groups.map((group) => ({
+    date: group[group.length - 1].date,
+    open: group[0].open,
+    high: Math.max(...group.map((g) => g.high)),
+    low: Math.min(...group.map((g) => g.low)),
+    close: group[group.length - 1].close,
+    volume: group.reduce((sum, g) => sum + g.volume, 0),
+  }));
+}
+
 export function KLineChart({ data, className }: KLineChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
   const [period, setPeriod] = useState<'day' | 'week' | 'month'>('day');
 
+  // 根据周期聚合数据
+  const chartData = useMemo(() => aggregateKLine(data, period), [data, period]);
+
+  // Init once, dispose on unmount
   useEffect(() => {
     if (!chartContainerRef.current) return;
-
     const chart = echarts.init(chartContainerRef.current, null);
     chartRef.current = chart;
 
-    const dates = data.map(item => item.date);
-    const values = data.map(item => [item.open, item.close, item.low, item.high]);
-    const volumes = data.map(item => item.volume);
+    const handleResize = () => chart.resize();
+    window.addEventListener('resize', handleResize);
 
-    const option = {
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      chart.dispose();
+      chartRef.current = null;
+    };
+  }, []);
+
+  // Update option when data or period changes
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || chartData.length === 0) return;
+
+    const isDark = document.documentElement.classList.contains('dark');
+    const colors = {
+      up: isDark ? '#ef4444' : '#dc2626',
+      down: isDark ? '#22c55e' : '#16a34a',
+      text: isDark ? '#94a3b8' : '#64748b',
+      line: isDark ? '#334155' : '#cbd5e1',
+      grid: isDark ? '#1e293b' : '#f1f5f9',
+      tooltipBg: isDark ? '#1e293b' : '#ffffff',
+      tooltipBorder: isDark ? '#334155' : '#e2e8f0',
+      tooltipText: isDark ? '#e2e8f0' : '#334155',
+      zoom: isDark ? 'rgba(96,165,250,0.2)' : 'rgba(59,130,246,0.2)',
+      zoomHandle: isDark ? '#60a5fa' : '#3b82f6',
+    };
+
+    const dates = chartData.map(item => item.date);
+    const values = chartData.map(item => [item.open, item.close, item.low, item.high]);
+    const volumes = chartData.map(item => item.volume);
+
+    chart.setOption({
       backgroundColor: 'transparent',
       tooltip: {
         trigger: 'axis',
         axisPointer: {
           type: 'cross'
         },
-        backgroundColor: '#ffffff',
-        borderColor: '#e2e8f0',
-        textStyle: { color: '#334155' }
+        backgroundColor: colors.tooltipBg,
+        borderColor: colors.tooltipBorder,
+        textStyle: { color: colors.tooltipText }
       },
       grid: [
         {
@@ -63,9 +162,9 @@ export function KLineChart({ data, className }: KLineChartProps) {
           type: 'category',
           data: dates,
           boundaryGap: false,
-          axisLine: { onZero: false, lineStyle: { color: '#cbd5e1' } },
+          axisLine: { onZero: false, lineStyle: { color: colors.line } },
           splitLine: { show: false },
-          axisLabel: { color: '#64748b' },
+          axisLabel: { color: colors.text },
           min: 'dataMin',
           max: 'dataMax'
         },
@@ -82,12 +181,12 @@ export function KLineChart({ data, className }: KLineChartProps) {
           splitArea: {
             show: true,
             areaStyle: {
-              color: ['rgba(255,255,255,0.02)', 'rgba(255,255,255,0)']
+              color: ['transparent', 'transparent']
             }
           },
-          axisLine: { lineStyle: { color: '#cbd5e1' } },
-          axisLabel: { color: '#64748b' },
-          splitLine: { lineStyle: { color: '#f1f5f9' } }
+          axisLine: { lineStyle: { color: colors.line } },
+          axisLabel: { color: colors.text },
+          splitLine: { lineStyle: { color: colors.grid } }
         },
         {
           scale: true,
@@ -113,11 +212,11 @@ export function KLineChart({ data, className }: KLineChartProps) {
           top: '92%',
           start: 50,
           end: 100,
-          textStyle: { color: '#64748b' },
-          borderColor: '#e2e8f0',
-          fillerColor: 'rgba(59, 130, 246, 0.2)',
+          textStyle: { color: colors.text },
+          borderColor: colors.line,
+          fillerColor: colors.zoom,
           handleStyle: {
-            color: '#3b82f6'
+            color: colors.zoomHandle
           }
         }
       ],
@@ -127,10 +226,10 @@ export function KLineChart({ data, className }: KLineChartProps) {
           type: 'candlestick',
           data: values,
           itemStyle: {
-            color: '#dc2626',
-            color0: '#16a34a',
-            borderColor: '#dc2626',
-            borderColor0: '#16a34a'
+            color: colors.up,
+            color0: colors.down,
+            borderColor: colors.up,
+            borderColor0: colors.down
           }
         },
         {
@@ -144,33 +243,20 @@ export function KLineChart({ data, className }: KLineChartProps) {
               const dataIndex = params.dataIndex;
               const close = values[dataIndex][1];
               const open = values[dataIndex][0];
-              return close >= open ? '#dc2626' : '#16a34a';
+              return close >= open ? colors.up : colors.down;
             }
           }
         }
       ]
-    };
-
-    chart.setOption(option);
-
-    const handleResize = () => {
-      chart.resize();
-    };
-
-    window.addEventListener('resize', handleResize);
-
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      chart.dispose();
-    };
-  }, [data]);
+    }, true); // notMerge=true for clean replace
+  }, [chartData]);
 
   return (
     <div className={cn('flex flex-col', className)}>
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
-          <BarChart3 className="w-5 h-5 text-slate-700" />
-          <span className="text-sm font-medium text-slate-900">K线图</span>
+          <BarChart3 className="w-5 h-5 text-muted-foreground" />
+          <span className="text-sm font-medium text-foreground">K线图</span>
         </div>
         <div className="flex gap-1">
           <Button
@@ -201,7 +287,7 @@ export function KLineChart({ data, className }: KLineChartProps) {
       </div>
       <div 
         ref={chartContainerRef} 
-        className="flex-1 min-h-[300px] rounded-lg bg-slate-50"
+        className="flex-1 min-h-[300px] rounded-lg bg-muted/50"
       />
     </div>
   );

@@ -128,7 +128,6 @@ export const NEWS_TABLES = [
   'futunn724_tb',            // 富途牛牛
   'ifeng724_tb',             // 凤凰财经
   'jin10qihuo724_tb',        // 金十期货
-  'chinastarmarkettelegraph724_tb', // 科创板日报
 
   // 其他平台
   'snowball724_tb',          // 雪球

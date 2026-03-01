@@ -125,7 +125,8 @@ export interface FlashNewsItem {
   display_time: number; // Unix 时间戳
   time: string;        // 格式化后的时间 HH:mm
   date: string;        // 格式化后的日期 MM-DD
-  importance: 'high' | 'normal';
+  importance: 'urgent' | 'high' | 'normal';
+  categories: string[];  // 内容分类标签
   images?: string[];
 }
 

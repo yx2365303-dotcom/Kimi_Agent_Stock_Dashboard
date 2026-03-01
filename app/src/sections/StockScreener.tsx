@@ -134,9 +134,12 @@ export function StockScreener() {
     <div className="space-y-4">
       {/* 标题 */}
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold text-slate-100">智能选股</h2>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" className="gap-1 border-slate-300 text-slate-700 hover:bg-slate-100">
+          <h2 className="text-xl font-bold text-foreground">智能选股</h2>
+          <Badge variant="outline" className="text-amber-600 border-amber-300 dark:text-amber-400 dark:border-amber-600 text-xs">开发中</Badge>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" className="gap-1 border-border text-muted-foreground hover:bg-muted">
             <Save className="w-4 h-4" />
             保存策略
           </Button>
@@ -144,15 +147,15 @@ export function StockScreener() {
       </div>
 
       {/* 筛选条件 */}
-      <Card className="p-4 bg-white border-slate-200">
+      <Card className="p-4 bg-background border-border">
         <div className="flex items-center gap-2 mb-4">
-          <Filter className="w-5 h-5 text-slate-500" />
-          <h3 className="text-lg font-semibold text-slate-900">筛选条件</h3>
+          <Filter className="w-5 h-5 text-muted-foreground" />
+          <h3 className="text-lg font-semibold text-foreground">筛选条件</h3>
         </div>
 
         {/* 市场选择 */}
         <div className="mb-4">
-          <div className="text-sm text-slate-500 mb-2">市场</div>
+          <div className="text-sm text-muted-foreground mb-2">市场</div>
           <div className="flex flex-wrap gap-2">
             {filterConditions[0].options?.map((option) => (
               <Button
@@ -163,7 +166,7 @@ export function StockScreener() {
                   'text-xs',
                   marketFilter === option.value 
                     ? 'bg-blue-600 hover:bg-blue-700 text-white' 
-                    : 'border-slate-300 text-slate-700 hover:bg-slate-100'
+                    : 'border-border text-muted-foreground hover:bg-muted'
                 )}
                 onClick={() => setMarketFilter(option.value)}
               >
@@ -175,53 +178,53 @@ export function StockScreener() {
 
         {/* 价格区间 */}
         <div className="mb-4">
-          <div className="text-sm text-slate-500 mb-2">价格区间</div>
+          <div className="text-sm text-muted-foreground mb-2">价格区间</div>
           <div className="flex items-center gap-2">
             <Input
               type="number"
               placeholder="最低价"
               value={priceRange.min}
               onChange={(e) => setPriceRange({ ...priceRange, min: e.target.value })}
-              className="w-24 h-8 bg-white border-slate-300 text-slate-900 text-sm placeholder:text-slate-400"
+              className="w-24 h-8 bg-background border-border text-foreground text-sm placeholder:text-muted-foreground"
             />
-            <span className="text-slate-500">-</span>
+            <span className="text-muted-foreground">-</span>
             <Input
               type="number"
               placeholder="最高价"
               value={priceRange.max}
               onChange={(e) => setPriceRange({ ...priceRange, max: e.target.value })}
-              className="w-24 h-8 bg-white border-slate-300 text-slate-900 text-sm placeholder:text-slate-400"
+              className="w-24 h-8 bg-background border-border text-foreground text-sm placeholder:text-muted-foreground"
             />
           </div>
         </div>
 
         {/* 涨跌幅区间 */}
         <div className="mb-4">
-          <div className="text-sm text-slate-600 mb-2">涨跌幅</div>
+          <div className="text-sm text-muted-foreground mb-2">涨跌幅</div>
           <div className="flex items-center gap-2">
             <Input
               type="number"
               placeholder="最小%"
               value={changeRange.min}
               onChange={(e) => setChangeRange({ ...changeRange, min: e.target.value })}
-              className="w-24 h-8 bg-white border-slate-300 text-slate-900 text-sm placeholder:text-slate-400"
+              className="w-24 h-8 bg-background border-border text-foreground text-sm placeholder:text-muted-foreground"
             />
-            <span className="text-slate-500">%</span>
-            <span className="text-slate-500">-</span>
+            <span className="text-muted-foreground">%</span>
+            <span className="text-muted-foreground">-</span>
             <Input
               type="number"
               placeholder="最大%"
               value={changeRange.max}
               onChange={(e) => setChangeRange({ ...changeRange, max: e.target.value })}
-              className="w-24 h-8 bg-white border-slate-300 text-slate-900 text-sm placeholder:text-slate-400"
+              className="w-24 h-8 bg-background border-border text-foreground text-sm placeholder:text-muted-foreground"
             />
-            <span className="text-slate-500">%</span>
+            <span className="text-muted-foreground">%</span>
           </div>
         </div>
 
         {/* 技术指标 */}
         <div className="mb-4">
-          <div className="text-sm text-slate-500 mb-2">技术指标</div>
+          <div className="text-sm text-muted-foreground mb-2">技术指标</div>
           <div className="flex flex-wrap gap-2">
             {technicalConditions.map((condition) => {
               const Icon = condition.icon;
@@ -233,7 +236,7 @@ export function StockScreener() {
                     'cursor-pointer gap-1 py-1.5 px-2',
                     selectedFilters.includes(condition.id)
                       ? 'bg-blue-600 hover:bg-blue-700 text-white'
-                      : 'border-slate-300 text-slate-700 hover:bg-slate-100'
+                      : 'border-border text-muted-foreground hover:bg-muted'
                   )}
                   onClick={() => toggleFilter(condition.id)}
                 >
@@ -247,7 +250,7 @@ export function StockScreener() {
 
         {/* 基本面 */}
         <div className="mb-4">
-          <div className="text-sm text-slate-600 mb-2">基本面</div>
+          <div className="text-sm text-muted-foreground mb-2">基本面</div>
           <div className="flex flex-wrap gap-2">
             {fundamentalConditions.map((condition) => {
               const Icon = condition.icon;
@@ -259,7 +262,7 @@ export function StockScreener() {
                     'cursor-pointer gap-1 py-1.5 px-2',
                     selectedFilters.includes(condition.id)
                       ? 'bg-green-600 hover:bg-green-700 text-white'
-                      : 'border-slate-300 text-slate-700 hover:bg-slate-100'
+                      : 'border-border text-muted-foreground hover:bg-muted'
                   )}
                   onClick={() => toggleFilter(condition.id)}
                 >
@@ -273,7 +276,7 @@ export function StockScreener() {
 
         {/* 资金面 */}
         <div className="mb-4">
-          <div className="text-sm text-slate-500 mb-2">资金面</div>
+          <div className="text-sm text-muted-foreground mb-2">资金面</div>
           <div className="flex flex-wrap gap-2">
             {capitalConditions.map((condition) => {
               const Icon = condition.icon;
@@ -285,7 +288,7 @@ export function StockScreener() {
                     'cursor-pointer gap-1 py-1.5 px-2',
                     selectedFilters.includes(condition.id)
                       ? 'bg-purple-600 hover:bg-purple-700 text-white'
-                      : 'border-slate-600 text-slate-300 hover:text-white hover:bg-slate-700'
+                      : 'border-border text-muted-foreground hover:text-white hover:bg-secondary'
                   )}
                   onClick={() => toggleFilter(condition.id)}
                 >
@@ -298,7 +301,7 @@ export function StockScreener() {
         </div>
 
         {/* 操作按钮 */}
-        <div className="flex gap-2 pt-2 border-t border-slate-200">
+        <div className="flex gap-2 pt-2 border-t border-border">
           <Button 
             className="flex-1 bg-blue-600 hover:bg-blue-700"
             onClick={handleSearch}
@@ -307,7 +310,7 @@ export function StockScreener() {
             <Search className="w-4 h-4 mr-1" />
             {isSearching ? '搜索中...' : '开始选股'}
           </Button>
-          <Button variant="outline" onClick={handleReset} className="border-slate-300 text-slate-700 hover:bg-slate-100">
+          <Button variant="outline" onClick={handleReset} className="border-border text-muted-foreground hover:bg-muted">
             <RotateCcw className="w-4 h-4 mr-1" />
             重置
           </Button>
@@ -316,14 +319,14 @@ export function StockScreener() {
 
       {/* 选股结果 */}
       {results.length > 0 && (
-        <Card className="p-4 bg-white border-slate-200">
+        <Card className="p-4 bg-background border-border">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold text-slate-900">
-              选股结果 <span className="text-sm text-slate-500">(共 {results.length} 只)</span>
+            <h3 className="text-lg font-semibold text-foreground">
+              选股结果 <span className="text-sm text-muted-foreground">(共 {results.length} 只)</span>
             </h3>
             <div className="flex gap-2">
-              <Button variant="outline" size="sm" className="border-slate-300 text-slate-700 hover:bg-slate-100">按涨幅</Button>
-              <Button variant="outline" size="sm" className="border-slate-300 text-slate-700 hover:bg-slate-100">按评分</Button>
+              <Button variant="outline" size="sm" className="border-border text-muted-foreground hover:bg-muted">按涨幅</Button>
+              <Button variant="outline" size="sm" className="border-border text-muted-foreground hover:bg-muted">按评分</Button>
             </div>
           </div>
 
@@ -332,28 +335,28 @@ export function StockScreener() {
               {results.map((stock, index) => (
                 <div
                   key={stock.code}
-                  className="flex items-center justify-between p-3 rounded-lg bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer"
+                  className="flex items-center justify-between p-3 rounded-lg bg-muted hover:bg-muted transition-colors cursor-pointer"
                 >
                   <div className="flex items-center gap-3">
                     <span className={cn(
                       'w-6 h-6 flex items-center justify-center text-xs font-bold rounded',
-                      index < 3 ? 'bg-yellow-100 text-yellow-700' : 'text-slate-500'
+                      index < 3 ? 'bg-yellow-100 text-yellow-700' : 'text-muted-foreground'
                     )}>
                       {index + 1}
                     </span>
                     <div>
-                      <div className="font-medium text-slate-900">{stock.name}</div>
-                      <div className="text-xs text-slate-500">{stock.code}</div>
+                      <div className="font-medium text-foreground">{stock.name}</div>
+                      <div className="text-xs text-muted-foreground">{stock.code}</div>
                     </div>
                   </div>
                   <div className="flex items-center gap-6">
                     <div className="text-right">
-                      <div className="text-slate-900 font-mono">{formatNumber(stock.price)}</div>
+                      <div className="text-foreground font-mono">{formatNumber(stock.price)}</div>
                     </div>
                     <div className={cn('text-right font-mono', getChangeColor(stock.change))}>
                       +{stock.change.toFixed(2)}%
                     </div>
-                    <div className="text-right text-slate-500">
+                    <div className="text-right text-muted-foreground">
                       {(stock.marketCap / 100).toFixed(0)}亿
                     </div>
                     <div className="flex items-center gap-1">
@@ -366,7 +369,7 @@ export function StockScreener() {
                         {stock.score}
                       </div>
                     </div>
-                    <Button variant="outline" size="sm" className="border-slate-300 text-slate-700 hover:bg-slate-100">
+                    <Button variant="outline" size="sm" className="border-border text-muted-foreground hover:bg-muted">
                       查看
                     </Button>
                   </div>

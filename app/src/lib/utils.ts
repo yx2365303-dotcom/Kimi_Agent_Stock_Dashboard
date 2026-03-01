@@ -36,18 +36,18 @@ export function formatVolume(vol: number): string {
   return vol.toString();
 }
 
-// 获取涨跌颜色 - 浅色背景
+// 获取涨跌颜色 - 使用主题变量
 export function getChangeColor(change: number): string {
-  if (change > 0) return 'text-red-600';
-  if (change < 0) return 'text-green-600';
-  return 'text-slate-500';
+  if (change > 0) return 'text-stock-up';
+  if (change < 0) return 'text-stock-down';
+  return 'text-stock-flat';
 }
 
 // 获取涨跌背景色
 export function getChangeBgColor(change: number): string {
-  if (change > 0) return 'bg-red-50';
-  if (change < 0) return 'bg-green-50';
-  return 'bg-slate-100';
+  if (change > 0) return 'bg-stock-up-bg';
+  if (change < 0) return 'bg-stock-down-bg';
+  return 'bg-muted';
 }
 
 // 格式化日期时间
@@ -96,4 +96,31 @@ export function throttle<T extends (...args: any[]) => void>(
       setTimeout(() => (inThrottle = false), limit);
     }
   };
+}
+
+// 格式化大数值（通用版：千元单位转亿/万）
+export function formatLargeNumber(value: number, unit: 'qian' | 'wan' | 'ge' = 'qian'): string {
+  if (!value) return '-';
+  // 统一转换到"元"为基准
+  let yuanValue = value;
+  if (unit === 'qian') yuanValue = value * 1000;      // 千元 → 元
+  else if (unit === 'wan') yuanValue = value * 10000;  // 万元 → 元
+
+  if (yuanValue >= 1e8) return (yuanValue / 1e8).toFixed(2) + '亿';
+  if (yuanValue >= 1e4) return (yuanValue / 1e4).toFixed(2) + '万';
+  return yuanValue.toFixed(2);
+}
+
+// 格式化成交量（手）
+export function formatVolumeHand(vol: number): string {
+  if (!vol) return '-';
+  if (vol >= 10000) return (vol / 10000).toFixed(2) + '万手';
+  return vol.toFixed(0) + '手';
+}
+
+// 格式化市值（万元 → 亿）
+export function formatMarketCap(value: number): string {
+  if (!value) return '-';
+  if (value >= 10000) return (value / 10000).toFixed(2) + '亿';
+  return value.toFixed(2) + '万';
 }

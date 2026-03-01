@@ -18,8 +18,8 @@ export default defineConfig({
         manualChunks(id) {
           if (!id.includes('node_modules')) return;
 
-          if (id.includes('recharts') || id.includes('echarts') || id.includes('lightweight-charts')) {
-            return 'vendor-charts';
+          if (id.includes('echarts') || id.includes('zrender')) {
+            return 'vendor-echarts';
           }
 
           if (id.includes('@supabase')) {

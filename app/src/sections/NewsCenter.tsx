@@ -1,105 +1,35 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import useSWR from 'swr';
 import { cn } from '@/lib/utils';
+import { logger } from '@/lib/logger';
 import { Card } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Calendar } from '@/components/ui/calendar';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   Newspaper,
   Zap,
   Building2,
   FileText,
   Calendar as CalendarIcon,
-  RefreshCw,
-  ChevronDown,
-  Radio,
   Wifi,
   WifiOff,
-  X,
-  ZoomIn,
-  Image as ImageIcon
 } from 'lucide-react';
-import { fetchRealTimeNews, NEWS_SOURCES } from '@/services/stockService';
+import { fetchRealTimeNews, NEWS_SOURCES } from '@/services/newsService';
 import { FEATURED_NEWS_TABLES, subscribeToNewsTables, getActiveSubscriptionCount } from '@/lib/supabase';
+import { classifyNews, type NewsImportance, type NewsCategory } from '@/lib/newsClassifier';
+import { NewsSidebar, NewsMobileFilters } from '@/components/news/NewsSidebar';
+import { NewsStream } from '@/components/news/NewsStream';
+import { NewsDetailModal, ImageLightbox } from '@/components/news/NewsDetailModal';
+import { NewsSearchBar } from '@/components/news/NewsSearchBar';
+import type { NewsCardItem } from '@/components/news/NewsItemCard';
 
-// 实时快讯类型
-interface FlashNewsItem {
-  id: string;
-  title: string;
-  content: string;
-  source: string;
-  sourceKey: string;
-  display_time: number;
-  time: string;
-  date: string;
-  importance: 'high' | 'normal';
-  images?: string[];
-}
-
-// 模拟公告数据（后续接入真实数据）
-const mockAnnouncements = [
-  { id: '1', title: '2024年度业绩预告', type: '业绩预告', date: '2024-01-15', code: '600519.SH', name: '贵州茅台' },
-  { id: '2', title: '关于控股股东增持股份的公告', type: '增减持', date: '2024-01-14', code: '000858.SZ', name: '五粮液' },
-  { id: '3', title: '2023年年度报告', type: '定期报告', date: '2024-01-13', code: '002230.SZ', name: '科大讯飞' },
-  { id: '4', title: '关于签署战略合作协议的公告', type: '重大事项', date: '2024-01-12', code: '300750.SZ', name: '宁德时代' },
-  { id: '5', title: '关于回购公司股份的进展公告', type: '回购', date: '2024-01-11', code: '600036.SH', name: '招商银行' },
-];
-
-// 模拟研报数据（后续接入真实数据）
-const mockResearchReports = [
-  { id: '1', title: '贵州茅台2024年业绩点评：稳健增长，长期价值凸显', org: '中信证券', rating: '买入', target: 1850, date: '2024-01-15' },
-  { id: '2', title: '白酒行业深度报告：集中度提升，龙头优势巩固', org: '中金公司', rating: '推荐', target: null, date: '2024-01-14' },
-  { id: '3', title: '宁德时代：技术领先，全球布局加速', org: '华泰证券', rating: '买入', target: 200, date: '2024-01-13' },
-  { id: '4', title: 'AI行业跟踪：大模型商业化加速', org: '招商证券', rating: '推荐', target: null, date: '2024-01-12' },
-];
-
-// 模拟财经日历（后续接入真实数据）
-const mockCalendar = [
-  { date: '01-16', time: '09:30', event: '1月LPR报价公布', type: '宏观', importance: 'high' },
-  { date: '01-16', time: '10:00', event: '贵州茅台财报披露', type: '财报', importance: 'high', code: '600519.SH', name: '贵州茅台' },
-  { date: '01-17', time: '09:30', event: '新股申购：某某科技', type: '新股', importance: 'normal' },
-  { date: '01-18', time: '15:00', event: '宁德时代股东大会', type: '股东大会', importance: 'normal', code: '300750.SZ', name: '宁德时代' },
-  { date: '01-19', time: '09:30', event: '12月经济数据发布', type: '宏观', importance: 'high' },
-];
-
-// 新闻源颜色映射
-const sourceColorMap: Record<string, string> = {
-  // 大V渠道 - 使用醒目颜色
-  snowball_influencer: 'bg-blue-500 text-white border-blue-600',
-  weibo_influencer: 'bg-orange-500 text-white border-orange-600',
-
-  // 主流平台
-  cls: 'bg-red-100 text-red-700 border-red-200',
-  eastmoney: 'bg-teal-100 text-teal-700 border-teal-200',
-  jin10: 'bg-yellow-100 text-yellow-700 border-yellow-200',
-  gelonghui: 'bg-emerald-100 text-emerald-700 border-emerald-200',
-  sina: 'bg-rose-100 text-rose-700 border-rose-200',
-  jqka: 'bg-purple-100 text-purple-700 border-purple-200',
-  jrj: 'bg-blue-100 text-blue-700 border-blue-200',
-  futunn: 'bg-green-100 text-green-700 border-green-200',
-  ifeng: 'bg-orange-100 text-orange-700 border-orange-200',
-  jin10qihuo: 'bg-amber-100 text-amber-700 border-amber-200',
-  chinastar: 'bg-indigo-100 text-indigo-700 border-indigo-200',
-
-  // 其他平台
-  snowball: 'bg-blue-100 text-blue-700 border-blue-200',
-  wallstreetcn: 'bg-slate-100 text-slate-700 border-slate-200',
-  xuangutong: 'bg-violet-100 text-violet-700 border-violet-200',
-  yicai: 'bg-sky-100 text-sky-700 border-sky-200',
-  yuncaijing: 'bg-cyan-100 text-cyan-700 border-cyan-200',
-};
+// ── 表名 ↔ 来源 key 双向映射 ─────────────────────────────
 
 const TABLE_TO_SOURCE_KEY: Record<string, string> = {
-  // 大V渠道
   'snowball_influencer_tb': 'snowball_influencer',
   'weibo_influencer_tb': 'weibo_influencer',
-
-  // 主流平台
   'clscntelegraph_tb': 'cls',
   'eastmoney724_tb': 'eastmoney',
   'jin10data724_tb': 'jin10',
@@ -110,9 +40,6 @@ const TABLE_TO_SOURCE_KEY: Record<string, string> = {
   'futunn724_tb': 'futunn',
   'ifeng724_tb': 'ifeng',
   'jin10qihuo724_tb': 'jin10qihuo',
-  'chinastarmarkettelegraph724_tb': 'chinastar',
-
-  // 其他平台
   'snowball724_tb': 'snowball',
   'wallstreetcn_tb': 'wallstreetcn',
   'xuangutong724_tb': 'xuangutong',
@@ -121,66 +48,95 @@ const TABLE_TO_SOURCE_KEY: Record<string, string> = {
 };
 
 const SOURCE_TO_TABLE_MAP: Record<string, string> = Object.entries(TABLE_TO_SOURCE_KEY).reduce(
-  (acc, [tableName, sourceKey]) => {
-    acc[sourceKey] = tableName;
-    return acc;
-  },
+  (acc, [tableName, sourceKey]) => { acc[sourceKey] = tableName; return acc; },
   {} as Record<string, string>
 );
 
+// ── Mock 数据（公告/研报/日历，待接入真实数据） ─────────────
+
+const mockAnnouncements = [
+  { id: '1', title: '2024年度业绩预告', type: '业绩预告', date: '2024-01-15', code: '600519.SH', name: '贵州茅台' },
+  { id: '2', title: '关于控股股东增持股份的公告', type: '增减持', date: '2024-01-14', code: '000858.SZ', name: '五粮液' },
+  { id: '3', title: '2023年年度报告', type: '定期报告', date: '2024-01-13', code: '002230.SZ', name: '科大讯飞' },
+  { id: '4', title: '关于签署战略合作协议的公告', type: '重大事项', date: '2024-01-12', code: '300750.SZ', name: '宁德时代' },
+  { id: '5', title: '关于回购公司股份的进展公告', type: '回购', date: '2024-01-11', code: '600036.SH', name: '招商银行' },
+];
+
+const mockResearchReports = [
+  { id: '1', title: '贵州茅台2024年业绩点评：稳健增长，长期价值凸显', org: '中信证券', rating: '买入', target: 1850 as number | null, date: '2024-01-15' },
+  { id: '2', title: '白酒行业深度报告：集中度提升，龙头优势巩固', org: '中金公司', rating: '推荐', target: null as number | null, date: '2024-01-14' },
+  { id: '3', title: '宁德时代：技术领先，全球布局加速', org: '华泰证券', rating: '买入', target: 200 as number | null, date: '2024-01-13' },
+  { id: '4', title: 'AI行业跟踪：大模型商业化加速', org: '招商证券', rating: '推荐', target: null as number | null, date: '2024-01-12' },
+];
+
+const mockCalendar = [
+  { date: '01-16', time: '09:30', event: '1月LPR报价公布', type: '宏观', importance: 'high' },
+  { date: '01-16', time: '10:00', event: '贵州茅台财报披露', type: '财报', importance: 'high', code: '600519.SH', name: '贵州茅台' },
+  { date: '01-17', time: '09:30', event: '新股申购：某某科技', type: '新股', importance: 'normal' },
+  { date: '01-18', time: '15:00', event: '宁德时代股东大会', type: '股东大会', importance: 'normal', code: '300750.SZ', name: '宁德时代' },
+  { date: '01-19', time: '09:30', event: '12月经济数据发布', type: '宏观', importance: 'high' },
+];
+
+// ── 工具函数 ────────────────────────────────────────────
+
+function formatNewsTime(timestamp: number): { time: string; date: string } {
+  const d = new Date(timestamp * 1000);
+  return {
+    time: `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`,
+    date: `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
+  };
+}
+
+function getAnnouncementTypeColor(type: string) {
+  switch (type) {
+    case '业绩预告': return 'bg-green-100 text-green-700';
+    case '定期报告': return 'bg-blue-100 text-blue-700';
+    case '重大事项': return 'bg-red-100 text-red-700';
+    case '增减持': return 'bg-yellow-100 text-yellow-700';
+    case '回购': return 'bg-purple-100 text-purple-700';
+    default: return 'bg-muted text-muted-foreground';
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+//  NewsCenter — 主组件
+// ══════════════════════════════════════════════════════════
+
 export function NewsCenter() {
+  // ── Tab 切换 ──
   const [activeTab, setActiveTab] = useState('flash');
-  const [flashNews, setFlashNews] = useState<FlashNewsItem[]>([]);
-  // refreshing state removed - was declared but never read
+
+  // ── 实时快讯数据 ──
+  const [flashNews, setFlashNews] = useState<NewsCardItem[]>([]);
   const [selectedSource, setSelectedSource] = useState<string>('all');
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
-  const [currentLimit, setCurrentLimit] = useState(50);
+  const [currentLimit, setCurrentLimit] = useState(200);
 
-  // 模态框状态
-  const [selectedNews, setSelectedNews] = useState<FlashNewsItem | null>(null);
+  // ── 筛选状态 ──
+  const [searchKeyword, setSearchKeyword] = useState('');
+  const [importanceFilter, setImportanceFilter] = useState<NewsImportance[]>([]);
+  const [categoryFilter, setCategoryFilter] = useState<NewsCategory[]>([]);
+
+  // ── 模态框 ──
+  const [selectedNews, setSelectedNews] = useState<NewsCardItem | null>(null);
   const [zoomedImage, setZoomedImage] = useState<string | null>(null);
 
-  // 日期筛选状态（默认为今天）
-  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
-  const [datePickerOpen, setDatePickerOpen] = useState(false);
-
-  // 格式化日期为 YYYY-MM-DD 用于 API 调用
-  const formatDateForApi = (date: Date): string => {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  };
-
-  // 格式化日期用于显示
-  const formatDateForDisplay = (date: Date): string => {
-    const month = date.getMonth() + 1;
-    const day = date.getDate();
-    return `${month}月${day}日`;
-  };
-
-  // 计算最近7天可选范围
-  const today = new Date();
-  const sevenDaysAgo = new Date();
-  sevenDaysAgo.setDate(today.getDate() - 6);
-
-  // Realtime 相关状态
+  // ── Realtime ──
   const [realtimeEnabled, setRealtimeEnabled] = useState(true);
-  const [newNewsCount, setNewNewsCount] = useState(0);
-  const [realtimeNews, setRealtimeNews] = useState<FlashNewsItem[]>([]);
+  const [newItemIds, setNewItemIds] = useState<Set<string>>(new Set());
   const unsubscribeRef = useRef<(() => void) | null>(null);
   const realtimeConnected = realtimeEnabled && getActiveSubscriptionCount() > 0;
-  const dateFilter = formatDateForApi(selectedDate);
   const selectedSources = selectedSource === 'all' ? undefined : [selectedSource];
 
+  // ── SWR 数据拉取（不加日期限制，直接取最新数据） ──
+
   const { isLoading, mutate } = useSWR(
-    ['news:realtime', selectedSource, dateFilter, currentLimit],
+    ['news:realtime:v2', selectedSource, currentLimit],
     () => fetchRealTimeNews({
       sources: selectedSources,
-      limit: selectedSource === 'all' ? 20 : 30,
+      limit: selectedSource === 'all' ? 50 : 80,
       totalLimit: currentLimit,
-      dateFilter
     }),
     {
       dedupingInterval: 5_000,
@@ -188,47 +144,27 @@ export function NewsCenter() {
       revalidateOnReconnect: false,
       refreshInterval: activeTab === 'flash' && !realtimeEnabled ? 30_000 : 0,
       onSuccess: (news) => {
-        setFlashNews(news);
+        const enriched = enrichNews(news);
+        setFlashNews(enriched);
         setHasMore(news.length >= currentLimit);
         setLoadingMore(false);
-      }
+      },
     }
   );
 
-  // 格式化时间戳
-  const formatNewsTime = (timestamp: number) => {
-    const d = new Date(timestamp * 1000);
-    const hours = String(d.getHours()).padStart(2, '0');
-    const minutes = String(d.getMinutes()).padStart(2, '0');
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return {
-      time: `${hours}:${minutes}`,
-      date: `${month}-${day}`
-    };
-  };
+  /** 给原始数据附加 importance(三级) + categories */
+  const enrichNews = useCallback((items: Array<Record<string, unknown>>): NewsCardItem[] => {
+    return (items as NewsCardItem[]).map(item => {
+      const { importance, categories } = classifyNews(item.title, item.content, item.sourceKey);
+      return { ...item, importance, categories };
+    });
+  }, []);
 
-  // 判断新闻重要性
-  const getNewsImportance = (title: string, content: string): 'high' | 'normal' => {
-    const importantKeywords = [
-      '央行', '降准', '降息', '利率', 'LPR', '国务院', '证监会', '银保监',
-      '重磅', '突发', '重要', '紧急', '官宣', '发布会',
-      '涨停', '跌停', '暴涨', '暴跌', '大涨', '大跌',
-      '特朗普', '美联储', 'Fed', '鲍威尔', 'GDP', 'CPI', 'PPI', 'PMI',
-      '战争', '制裁', '关税', '贸易战',
-    ];
-    const text = (title + content).toLowerCase();
-    return importantKeywords.some(keyword => text.includes(keyword.toLowerCase())) ? 'high' : 'normal';
-  };
+  // ── Realtime 订阅：新数据直接插入主列表 ──
 
-  // 设置 Realtime 订阅
   useEffect(() => {
     if (!realtimeEnabled) {
-      // 如果禁用实时更新，取消订阅
-      if (unsubscribeRef.current) {
-        unsubscribeRef.current();
-        unsubscribeRef.current = null;
-      }
+      if (unsubscribeRef.current) { unsubscribeRef.current(); unsubscribeRef.current = null; }
       return;
     }
 
@@ -236,18 +172,25 @@ export function NewsCenter() {
       ? FEATURED_NEWS_TABLES
       : (SOURCE_TO_TABLE_MAP[selectedSource] ? [SOURCE_TO_TABLE_MAP[selectedSource]] : []);
 
-    if (targetTables.length === 0) {
-      return;
-    }
+    if (targetTables.length === 0) return;
 
     const unsubscribe = subscribeToNewsTables(targetTables, (tableName, payload) => {
       const newData = payload.new as Record<string, unknown>;
       const sourceKey = TABLE_TO_SOURCE_KEY[tableName] || 'unknown';
       const sourceName = NEWS_SOURCES.find(s => s.key === sourceKey)?.name || tableName;
-
       const { time, date } = formatNewsTime(newData.display_time as number);
+      const { importance, categories } = classifyNews(
+        (newData.title as string) || '',
+        (newData.content as string) || '',
+        sourceKey,
+      );
 
-      const newsItem: FlashNewsItem = {
+      let parsedImages: string[] | undefined;
+      if (typeof newData.images === 'string' && (newData.images as string).trim()) {
+        try { parsedImages = JSON.parse(newData.images as string); } catch { /* noop */ }
+      }
+
+      const newsItem: NewsCardItem = {
         id: `${sourceKey}_${newData.id}`,
         title: (newData.title as string) || '',
         content: (newData.content as string) || '',
@@ -256,124 +199,115 @@ export function NewsCenter() {
         display_time: newData.display_time as number,
         time,
         date,
-        importance: getNewsImportance(
-          (newData.title as string) || '',
-          (newData.content as string) || ''
-        ),
+        importance,
+        categories,
+        images: parsedImages,
       };
 
-      // 如果选择了特定来源，只显示该来源的新闻
-      if (selectedSource !== 'all' && sourceKey !== selectedSource) {
-        return;
-      }
+      if (selectedSource !== 'all' && sourceKey !== selectedSource) return;
 
-      // 添加到实时新闻队列
-      setRealtimeNews(prev => [newsItem, ...prev].slice(0, 50));
-      setNewNewsCount(prev => prev + 1);
+      // 直接插入主列表顶部（去重）
+      setFlashNews(prev => {
+        if (prev.some(n => n.id === newsItem.id)) return prev;
+        return [newsItem, ...prev];
+      });
 
-      console.log('[Realtime] 收到新新闻:', newsItem.title || newsItem.content.substring(0, 50));
+      // 标记为新条目（用于高亮动画），3 秒后移除标记
+      setNewItemIds(prev => new Set(prev).add(newsItem.id));
+      setTimeout(() => {
+        setNewItemIds(prev => {
+          const next = new Set(prev);
+          next.delete(newsItem.id);
+          return next;
+        });
+      }, 3000);
+
+      logger.log('[Realtime] 自动合并新新闻:', newsItem.title || newsItem.content.substring(0, 50));
     });
 
     unsubscribeRef.current = unsubscribe;
-    console.log('[Realtime] 已启用实时订阅，订阅数:', getActiveSubscriptionCount(), '订阅表:', targetTables);
+    logger.log('[Realtime] 已启用实时订阅，订阅数:', getActiveSubscriptionCount(), '订阅表:', targetTables);
 
     return () => {
-      if (unsubscribeRef.current) {
-        unsubscribeRef.current();
-        unsubscribeRef.current = null;
-      }
+      if (unsubscribeRef.current) { unsubscribeRef.current(); unsubscribeRef.current = null; }
     };
   }, [realtimeEnabled, selectedSource]);
 
-  // 合并实时新闻到主列表
-  const mergeRealtimeNews = useCallback(() => {
-    if (realtimeNews.length === 0) return;
+  // ── 前端筛选（只展示最近 7 天数据） ──
 
-    setFlashNews(prev => {
-      // 合并并去重
-      const merged = [...realtimeNews, ...prev];
-      const seen = new Set<string>();
-      const unique = merged.filter(item => {
-        if (seen.has(item.id)) return false;
-        seen.add(item.id);
-        return true;
-      });
-      // 按时间排序
-      unique.sort((a, b) => b.display_time - a.display_time);
-      return unique;
-    });
+  const filteredNews = useMemo(() => {
+    // 计算 7 天前的时间戳（秒）
+    const now = new Date();
+    const sevenDaysAgo = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6, 0, 0, 0);
+    const sevenDaysAgoTs = Math.floor(sevenDaysAgo.getTime() / 1000);
 
-    setRealtimeNews([]);
-    setNewNewsCount(0);
-  }, [realtimeNews]);
+    // 先按 7 天筛选
+    let result = flashNews.filter(n => n.display_time >= sevenDaysAgoTs);
 
-  // 加载更多
+    // 关键词搜索
+    if (searchKeyword.trim()) {
+      const kw = searchKeyword.trim().toLowerCase();
+      result = result.filter(n =>
+        n.title.toLowerCase().includes(kw) || n.content.toLowerCase().includes(kw)
+      );
+    }
+
+    // 重要性筛选（多选 OR）
+    if (importanceFilter.length > 0) {
+      result = result.filter(n => importanceFilter.includes(n.importance));
+    }
+
+    // 分类筛选（多选 OR：只要新闻包含任一选中分类即可）
+    if (categoryFilter.length > 0) {
+      result = result.filter(n =>
+        n.categories.some(c => categoryFilter.includes(c as NewsCategory))
+      );
+    }
+
+    return result;
+  }, [flashNews, searchKeyword, importanceFilter, categoryFilter]);
+
+  // ── 加载更多 ──
   const loadMore = useCallback(() => {
     if (loadingMore || !hasMore) return;
     setLoadingMore(true);
-    setCurrentLimit(prev => prev + 50);
+    setCurrentLimit(prev => prev + 200);
   }, [loadingMore, hasMore]);
+
+  // ── 切换来源时重置 ──
+  const handleSourceChange = useCallback((source: string) => {
+    setSelectedSource(source);
+    setCurrentLimit(200);
+  }, []);
 
   const loading = isLoading && flashNews.length === 0;
 
-  const getImportanceColor = (importance: string) => {
-    switch (importance) {
-      case 'high': return 'bg-red-100 text-red-700';
-      case 'normal': return 'bg-blue-100 text-blue-700';
-      default: return 'bg-slate-100 text-slate-600';
-    }
-  };
-
-  const getAnnouncementTypeColor = (type: string) => {
-    switch (type) {
-      case '业绩预告': return 'bg-green-100 text-green-700';
-      case '定期报告': return 'bg-blue-100 text-blue-700';
-      case '重大事项': return 'bg-red-100 text-red-700';
-      case '增减持': return 'bg-yellow-100 text-yellow-700';
-      case '回购': return 'bg-purple-100 text-purple-700';
-      default: return 'bg-slate-100 text-slate-600';
-    }
-  };
-
-  // 按日期分组新闻
-  const groupNewsByDate = (news: FlashNewsItem[]) => {
-    const groups: Record<string, FlashNewsItem[]> = {};
-    news.forEach(item => {
-      if (!groups[item.date]) {
-        groups[item.date] = [];
-      }
-      groups[item.date].push(item);
-    });
-    return groups;
-  };
-
-  const newsGroups = groupNewsByDate(flashNews);
+  // ═══════════════════════════════════════════════════════
+  //  渲染
+  // ═══════════════════════════════════════════════════════
 
   return (
     <div className="space-y-4">
-      {/* 标题 */}
+      {/* 标题栏 */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Newspaper className="w-6 h-6 text-blue-600" />
-          <h2 className="text-xl font-bold text-slate-900">财经资讯</h2>
+          <h2 className="text-xl font-bold text-foreground">财经资讯</h2>
         </div>
-        {/* Realtime 状态指示器 */}
+        {/* Realtime 状态 */}
         <div className="flex items-center gap-2">
           <Button
             variant="ghost"
             size="sm"
             onClick={() => setRealtimeEnabled(!realtimeEnabled)}
-            className={cn(
-              "gap-1 text-xs",
-              realtimeConnected ? "text-green-600" : "text-slate-400"
-            )}
+            className={cn('gap-1 text-xs', realtimeConnected ? 'text-green-600' : 'text-muted-foreground')}
           >
             {realtimeConnected ? (
               <>
                 <Wifi className="w-4 h-4" />
                 <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
                 </span>
                 实时连接中
               </>
@@ -387,17 +321,12 @@ export function NewsCenter() {
         </div>
       </div>
 
-      {/* Tab切换 */}
+      {/* Tab 切换 */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <TabsList className="w-full justify-start bg-slate-100 overflow-x-auto">
-          <TabsTrigger value="flash" className="data-[state=active]:bg-white gap-1 relative">
+        <TabsList className="w-full justify-start bg-muted overflow-x-auto">
+          <TabsTrigger value="flash" className="data-[state=active]:bg-white gap-1">
             <Zap className="w-4 h-4" />
             实时快讯
-            {newNewsCount > 0 && (
-              <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center animate-pulse">
-                {newNewsCount > 99 ? '99+' : newNewsCount}
-              </span>
-            )}
           </TabsTrigger>
           <TabsTrigger value="announcement" className="data-[state=active]:bg-white gap-1">
             <Building2 className="w-4 h-4" />
@@ -413,281 +342,79 @@ export function NewsCenter() {
           </TabsTrigger>
         </TabsList>
 
+        {/* ═══ 实时快讯 Tab ═══ */}
         <TabsContent value="flash" className="mt-4">
-          <Card className="p-4 bg-white border-slate-200">
-            {/* 头部：标题和日期选择器 */}
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <Zap className="w-5 h-5 text-yellow-600" />
-                <h3 className="text-lg font-semibold text-slate-900">7×24小时快讯</h3>
-                <span className="text-xs text-slate-500">
-                  {flashNews.length > 0 && `(${flashNews.length}条)`}
-                </span>
-              </div>
+          {/* 头部：标题 */}
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <Zap className="w-5 h-5 text-yellow-600" />
+              <h3 className="text-lg font-semibold text-foreground">7×24小时快讯</h3>
+              <span className="text-xs text-muted-foreground">
+                {filteredNews.length > 0 && `(最近7天 · ${filteredNews.length}条)`}
+              </span>
+            </div>
+          </div>
 
-              {/* 日期选择器 */}
-              <Popover open={datePickerOpen} onOpenChange={setDatePickerOpen}>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="gap-2 text-sm font-normal"
-                  >
-                    <CalendarIcon className="w-4 h-4" />
-                    {formatDateForDisplay(selectedDate)}
-                    {selectedDate.toDateString() === today.toDateString() && (
-                      <Badge className="bg-blue-100 text-blue-700 text-xs ml-1">今天</Badge>
-                    )}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="end">
-                  <Calendar
-                    mode="single"
-                    selected={selectedDate}
-                    onSelect={(date) => {
-                      if (date) {
-                        setSelectedDate(date);
-                        setCurrentLimit(50);
-                        setDatePickerOpen(false);
-                      }
-                    }}
-                    disabled={(date) => {
-                      // 只能选择最近7天（包括今天）
-                      const dateOnly = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-                      const todayOnly = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-                      const sevenDaysAgoOnly = new Date(sevenDaysAgo.getFullYear(), sevenDaysAgo.getMonth(), sevenDaysAgo.getDate());
-                      return dateOnly > todayOnly || dateOnly < sevenDaysAgoOnly;
-                    }}
-                    className="p-6 [--cell-size:3rem] text-base"
-                    formatters={{
-                      formatCaption: (date) => {
-                        const year = date.getFullYear();
-                        const month = date.getMonth() + 1;
-                        return `${year}年${month}月`;
-                      },
-                      formatWeekdayName: (date) => {
-                        const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
-                        return weekdays[date.getDay()];
-                      },
-                    }}
-                    initialFocus
-                  />
-                </PopoverContent>
-              </Popover>
+          {/* 移动端搜索框 + 来源 Badge（md 以下显示） */}
+          <div className="md:hidden space-y-3 mb-4">
+            <NewsSearchBar
+              value={searchKeyword}
+              onChange={setSearchKeyword}
+              resultCount={searchKeyword ? filteredNews.length : undefined}
+            />
+            <NewsMobileFilters
+              sources={NEWS_SOURCES}
+              selectedSource={selectedSource}
+              onSourceChange={handleSourceChange}
+            />
+          </div>
+
+          {/* 双栏布局：侧边栏 + 新闻流 */}
+          <div className="flex gap-4">
+            {/* 左侧侧边栏（桌面端） */}
+            <div className="hidden md:block">
+              <NewsSidebar
+                searchKeyword={searchKeyword}
+                onSearchChange={setSearchKeyword}
+                searchResultCount={searchKeyword ? filteredNews.length : undefined}
+                sources={NEWS_SOURCES}
+                selectedSource={selectedSource}
+                onSourceChange={handleSourceChange}
+                importanceFilter={importanceFilter}
+                onImportanceFilterChange={setImportanceFilter}
+                categoryFilter={categoryFilter}
+                onCategoryFilterChange={setCategoryFilter}
+              />
             </div>
 
-            {/* 新消息提示条 */}
-            {newNewsCount > 0 && (
-              <div
-                className="mb-4 p-2 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-center gap-2 cursor-pointer hover:bg-blue-100 transition-colors"
-                onClick={mergeRealtimeNews}
-              >
-                <Radio className="w-4 h-4 text-blue-600 animate-pulse" />
-                <span className="text-sm text-blue-700">
-                  收到 <span className="font-bold">{newNewsCount}</span> 条新消息，点击查看
-                </span>
-              </div>
-            )}
-
-            {/* 来源筛选器 - 默认展示 */}
-            <div className="flex flex-wrap gap-2 mb-4 p-3 bg-slate-50 rounded-lg">
-              <Badge
-                className={cn(
-                  'cursor-pointer transition-colors',
-                  selectedSource === 'all'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
-                )}
-                onClick={() => {
-                  setSelectedSource('all');
-                  setCurrentLimit(50);
-                }}
-              >
-                全部
-              </Badge>
-              {NEWS_SOURCES.map((source) => (
-                <Badge
-                  key={source.key}
-                  className={cn(
-                    'cursor-pointer transition-colors',
-                    selectedSource === source.key
-                      ? 'bg-blue-600 text-white'
-                      : sourceColorMap[source.key] || 'bg-slate-200 text-slate-700 hover:bg-slate-300'
-                  )}
-                  onClick={() => {
-                    setSelectedSource(source.key);
-                    setCurrentLimit(50);
-                  }}
-                >
-                  {source.name}
-                </Badge>
-              ))}
-            </div>
-
-            {/* 新闻列表 */}
-            <ScrollArea className="h-[550px]">
-              {loading ? (
-                // 加载骨架屏
-                <div className="space-y-3">
-                  {Array.from({ length: 8 }).map((_, i) => (
-                    <div key={i} className="flex items-start gap-3 p-3 rounded-lg bg-slate-50">
-                      <div className="flex flex-col items-center min-w-14">
-                        <Skeleton className="h-4 w-10 mb-1" />
-                        <Skeleton className="h-5 w-8" />
-                      </div>
-                      <div className="flex-1">
-                        <Skeleton className="h-4 w-full mb-2" />
-                        <Skeleton className="h-3 w-24" />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : flashNews.length === 0 ? (
-                // 空状态
-                <div className="flex flex-col items-center justify-center h-64 text-slate-500">
-                  <Newspaper className="w-12 h-12 mb-2 opacity-50" />
-                  <p>暂无新闻数据</p>
-                  <Button
-                    variant="link"
-                    onClick={() => mutate()}
-                    className="mt-2"
-                  >
-                    点击重试
-                  </Button>
-                </div>
-              ) : (
-                // 新闻内容
-                <div className="space-y-4">
-                  {Object.entries(newsGroups).map(([date, items]) => (
-                    <div key={date}>
-                      {/* 日期分隔 */}
-                      <div className="flex items-center gap-2 mb-2 sticky top-0 bg-white py-1 z-10">
-                        <div className="h-px flex-1 bg-slate-200" />
-                        <span className="text-xs font-medium text-slate-500 px-2">{date}</span>
-                        <div className="h-px flex-1 bg-slate-200" />
-                      </div>
-
-                      {/* 该日期下的新闻 */}
-                      <div className="space-y-2">
-                        {items.map((news) => (
-                          <div
-                            key={news.id}
-                            className="flex items-start gap-3 p-3 rounded-lg bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer hover:shadow-sm"
-                            onClick={() => setSelectedNews(news)}
-                          >
-                            <div className="flex flex-col items-center min-w-14">
-                              <span className="text-sm font-mono text-slate-600">{news.time}</span>
-                              <Badge className={cn('text-xs mt-1', getImportanceColor(news.importance))}>
-                                {news.importance === 'high' ? '重要' : '普通'}
-                              </Badge>
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              {/* 标题或内容 */}
-                              {news.title ? (
-                                <>
-                                  <p className="text-sm font-medium text-slate-900 mb-1">{news.title}</p>
-                                  {news.content && news.content !== news.title && (
-                                    <p className="text-xs text-slate-600 line-clamp-2">{news.content}</p>
-                                  )}
-                                </>
-                              ) : (
-                                <p className="text-sm text-slate-900 line-clamp-3">{news.content}</p>
-                              )}
-
-                              {/* 图片缩略图 */}
-                              {news.images && news.images.length > 0 && (
-                                <div className="flex items-center gap-2 mt-2">
-                                  {news.images.slice(0, 3).map((img, idx) => (
-                                    <div
-                                      key={idx}
-                                      className="relative w-12 h-12 rounded overflow-hidden border border-slate-200 flex-shrink-0"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        setZoomedImage(img);
-                                      }}
-                                    >
-                                      <img
-                                        src={img}
-                                        alt=""
-                                        className="w-full h-full object-cover"
-                                        onError={(e) => {
-                                          (e.target as HTMLImageElement).parentElement!.style.display = 'none';
-                                        }}
-                                      />
-                                    </div>
-                                  ))}
-                                  {news.images.length > 3 && (
-                                    <div className="w-12 h-12 rounded bg-slate-200 flex items-center justify-center flex-shrink-0">
-                                      <span className="text-xs text-slate-600">+{news.images.length - 3}</span>
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-
-                              {/* 来源和图片数量 */}
-                              <div className="flex items-center gap-2 mt-1">
-                                <Badge
-                                  variant="outline"
-                                  className={cn(
-                                    'text-xs',
-                                    sourceColorMap[news.sourceKey] || 'bg-slate-100 text-slate-600'
-                                  )}
-                                >
-                                  {news.source}
-                                </Badge>
-                                {news.images && news.images.length > 0 && (
-                                  <span className="text-xs text-slate-400 flex items-center gap-1">
-                                    <ImageIcon className="w-3 h-3" />
-                                    {news.images.length}
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-
-                  {/* 加载更多 */}
-                  {hasMore && (
-                    <div className="flex justify-center py-4">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={loadMore}
-                        disabled={loadingMore}
-                        className="gap-1"
-                      >
-                        {loadingMore ? (
-                          <>
-                            <RefreshCw className="w-4 h-4 animate-spin" />
-                            加载中...
-                          </>
-                        ) : (
-                          <>
-                            <ChevronDown className="w-4 h-4" />
-                            加载更多
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              )}
-            </ScrollArea>
-          </Card>
+            {/* 右侧新闻流 */}
+            <Card className="flex-1 p-4 bg-background border-border min-w-0">
+              <NewsStream
+                news={filteredNews}
+                loading={loading}
+                hasMore={hasMore && !searchKeyword}
+                loadingMore={loadingMore}
+                searchKeyword={searchKeyword}
+                newItemIds={newItemIds}
+                onLoadMore={loadMore}
+                onRetry={() => mutate()}
+                onSelectNews={setSelectedNews}
+                onZoomImage={setZoomedImage}
+              />
+            </Card>
+          </div>
         </TabsContent>
 
+        {/* ═══ 公司公告 Tab ═══ */}
         <TabsContent value="announcement" className="mt-4">
-          <Card className="p-4 bg-white border-slate-200">
+          <Card className="p-4 bg-background border-border">
             <div className="flex items-center gap-2 mb-4">
               <Building2 className="w-5 h-5 text-blue-600" />
-              <h3 className="text-lg font-semibold text-slate-900">公司公告</h3>
-              <span className="text-xs text-slate-400">(示例数据，待接入)</span>
+              <h3 className="text-lg font-semibold text-foreground">公司公告</h3>
+              <span className="text-xs text-muted-foreground">(示例数据，待接入)</span>
             </div>
             <div className="flex flex-wrap gap-2 mb-4">
-              <Badge className="bg-slate-200 text-slate-700 cursor-pointer hover:bg-slate-300">全部</Badge>
+              <Badge className="bg-border text-muted-foreground cursor-pointer hover:bg-muted">全部</Badge>
               <Badge className="bg-green-100 text-green-700 cursor-pointer">业绩预告</Badge>
               <Badge className="bg-blue-100 text-blue-700 cursor-pointer">定期报告</Badge>
               <Badge className="bg-red-100 text-red-700 cursor-pointer">重大事项</Badge>
@@ -696,23 +423,16 @@ export function NewsCenter() {
             </div>
             <ScrollArea className="h-[400px]">
               <div className="space-y-2">
-                {mockAnnouncements.map((announcement) => (
-                  <div
-                    key={announcement.id}
-                    className="flex items-center justify-between p-3 rounded-lg bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer"
-                  >
+                {mockAnnouncements.map((a) => (
+                  <div key={a.id} className="flex items-center justify-between p-3 rounded-lg bg-muted hover:bg-muted transition-colors cursor-pointer">
                     <div className="flex items-center gap-3">
-                      <Badge className={getAnnouncementTypeColor(announcement.type)}>
-                        {announcement.type}
-                      </Badge>
+                      <Badge className={getAnnouncementTypeColor(a.type)}>{a.type}</Badge>
                       <div>
-                        <p className="text-sm text-slate-900">{announcement.title}</p>
-                        <p className="text-xs text-slate-600">
-                          {announcement.name} ({announcement.code})
-                        </p>
+                        <p className="text-sm text-foreground">{a.title}</p>
+                        <p className="text-xs text-muted-foreground">{a.name} ({a.code})</p>
                       </div>
                     </div>
-                    <span className="text-xs text-slate-600">{announcement.date}</span>
+                    <span className="text-xs text-muted-foreground">{a.date}</span>
                   </div>
                 ))}
               </div>
@@ -720,37 +440,28 @@ export function NewsCenter() {
           </Card>
         </TabsContent>
 
+        {/* ═══ 研究报告 Tab ═══ */}
         <TabsContent value="report" className="mt-4">
-          <Card className="p-4 bg-white border-slate-200">
+          <Card className="p-4 bg-background border-border">
             <div className="flex items-center gap-2 mb-4">
               <FileText className="w-5 h-5 text-purple-600" />
-              <h3 className="text-lg font-semibold text-slate-900">研究报告</h3>
-              <span className="text-xs text-slate-400">(示例数据，待接入)</span>
+              <h3 className="text-lg font-semibold text-foreground">研究报告</h3>
+              <span className="text-xs text-muted-foreground">(示例数据，待接入)</span>
             </div>
             <ScrollArea className="h-[400px]">
               <div className="space-y-3">
-                {mockResearchReports.map((report) => (
-                  <div
-                    key={report.id}
-                    className="p-4 rounded-lg bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer"
-                  >
+                {mockResearchReports.map((r) => (
+                  <div key={r.id} className="p-4 rounded-lg bg-muted hover:bg-muted transition-colors cursor-pointer">
                     <div className="flex items-start justify-between mb-2">
-                      <h4 className="text-sm font-medium text-slate-900 flex-1">{report.title}</h4>
-                      <Badge className={cn(
-                        'ml-2',
-                        report.rating === '买入' ? 'bg-red-100 text-red-700' :
-                          report.rating === '推荐' ? 'bg-yellow-100 text-yellow-700' :
-                            'bg-slate-100 text-slate-600'
-                      )}>
-                        {report.rating}
+                      <h4 className="text-sm font-medium text-foreground flex-1">{r.title}</h4>
+                      <Badge className={cn('ml-2', r.rating === '买入' ? 'bg-red-100 text-red-700' : r.rating === '推荐' ? 'bg-yellow-100 text-yellow-700' : 'bg-muted text-muted-foreground')}>
+                        {r.rating}
                       </Badge>
                     </div>
-                    <div className="flex items-center gap-4 text-xs text-slate-600">
-                      <span>{report.org}</span>
-                      {report.target && (
-                        <span>目标价: <span className="text-red-600 font-mono">{report.target}</span></span>
-                      )}
-                      <span>{report.date}</span>
+                    <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                      <span>{r.org}</span>
+                      {r.target && <span>目标价: <span className="text-red-600 font-mono">{r.target}</span></span>}
+                      <span>{r.date}</span>
                     </div>
                   </div>
                 ))}
@@ -759,47 +470,33 @@ export function NewsCenter() {
           </Card>
         </TabsContent>
 
+        {/* ═══ 财经日历 Tab ═══ */}
         <TabsContent value="calendar" className="mt-4">
-          <Card className="p-4 bg-white border-slate-200">
+          <Card className="p-4 bg-background border-border">
             <div className="flex items-center gap-2 mb-4">
               <CalendarIcon className="w-5 h-5 text-green-600" />
-              <h3 className="text-lg font-semibold text-slate-900">财经日历</h3>
-              <span className="text-xs text-slate-400">(示例数据，待接入)</span>
+              <h3 className="text-lg font-semibold text-foreground">财经日历</h3>
+              <span className="text-xs text-muted-foreground">(示例数据，待接入)</span>
             </div>
             <ScrollArea className="h-[400px]">
               <div className="space-y-3">
                 {mockCalendar.map((event, index) => (
-                  <div
-                    key={index}
-                    className="flex items-center gap-4 p-3 rounded-lg bg-slate-50 hover:bg-slate-100 transition-colors"
-                  >
+                  <div key={index} className="flex items-center gap-4 p-3 rounded-lg bg-muted hover:bg-muted transition-colors">
                     <div className="flex flex-col items-center min-w-16">
-                      <span className="text-sm font-bold text-slate-900">{event.date}</span>
-                      <span className="text-xs text-slate-600">{event.time}</span>
+                      <span className="text-sm font-bold text-foreground">{event.date}</span>
+                      <span className="text-xs text-muted-foreground">{event.time}</span>
                     </div>
                     <div className="flex-1">
-                      <p className="text-sm text-slate-900">{event.event}</p>
-                      {event.name && (
-                        <p className="text-xs text-slate-600">
-                          {event.name} ({event.code})
-                        </p>
+                      <p className="text-sm text-foreground">{event.event}</p>
+                      {'name' in event && event.name && (
+                        <p className="text-xs text-muted-foreground">{event.name} ({(event as { code: string }).code})</p>
                       )}
                     </div>
                     <div className="flex items-center gap-2">
-                      <Badge className={cn(
-                        'text-xs',
-                        event.type === '宏观' ? 'bg-red-100 text-red-700' :
-                          event.type === '财报' ? 'bg-blue-100 text-blue-700' :
-                            event.type === '新股' ? 'bg-green-100 text-green-700' :
-                              'bg-slate-100 text-slate-600'
-                      )}>
+                      <Badge className={cn('text-xs', event.type === '宏观' ? 'bg-red-100 text-red-700' : event.type === '财报' ? 'bg-blue-100 text-blue-700' : event.type === '新股' ? 'bg-green-100 text-green-700' : 'bg-muted text-muted-foreground')}>
                         {event.type}
                       </Badge>
-                      <Badge className={cn(
-                        'text-xs',
-                        event.importance === 'high' ? 'bg-red-100 text-red-700' :
-                          'bg-slate-100 text-slate-600'
-                      )}>
+                      <Badge className={cn('text-xs', event.importance === 'high' ? 'bg-red-100 text-red-700' : 'bg-muted text-muted-foreground')}>
                         {event.importance === 'high' ? '重要' : '普通'}
                       </Badge>
                     </div>
@@ -813,106 +510,16 @@ export function NewsCenter() {
 
       {/* 新闻详情模态框 */}
       {selectedNews && (
-        <div
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-          onClick={() => setSelectedNews(null)}
-        >
-          <div
-            className="bg-white rounded-2xl max-w-2xl w-full max-h-[85vh] overflow-hidden shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* 头部 */}
-            <div className="flex items-center justify-between p-4 border-b border-slate-200">
-              <div className="flex items-center gap-3">
-                <Badge
-                  className={cn(
-                    'text-xs',
-                    sourceColorMap[selectedNews.sourceKey] || 'bg-slate-100 text-slate-600'
-                  )}
-                >
-                  {selectedNews.source}
-                </Badge>
-                <span className="text-sm text-slate-500">{selectedNews.date} {selectedNews.time}</span>
-                <Badge className={cn('text-xs', getImportanceColor(selectedNews.importance))}>
-                  {selectedNews.importance === 'high' ? '重要' : '普通'}
-                </Badge>
-              </div>
-              <button
-                onClick={() => setSelectedNews(null)}
-                className="p-2 hover:bg-slate-100 rounded-full transition-colors"
-              >
-                <X className="w-5 h-5 text-slate-500" />
-              </button>
-            </div>
-
-            {/* 内容 */}
-            <ScrollArea className="max-h-[calc(85vh-120px)]">
-              <div className="p-6">
-                {selectedNews.title && (
-                  <h2 className="text-xl font-bold text-slate-900 mb-4">{selectedNews.title}</h2>
-                )}
-                <p className="text-base text-slate-700 leading-relaxed whitespace-pre-wrap">
-                  {selectedNews.content}
-                </p>
-
-                {/* 图片展示 */}
-                {selectedNews.images && selectedNews.images.length > 0 && (
-                  <div className="mt-6">
-                    <div className="flex items-center gap-2 mb-3">
-                      <ImageIcon className="w-4 h-4 text-slate-500" />
-                      <span className="text-sm text-slate-500">相关图片 ({selectedNews.images.length})</span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      {selectedNews.images.map((img, idx) => (
-                        <div
-                          key={idx}
-                          className="relative group cursor-pointer rounded-lg overflow-hidden border border-slate-200"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setZoomedImage(img);
-                          }}
-                        >
-                          <img
-                            src={img}
-                            alt={`图片 ${idx + 1}`}
-                            className="w-full h-40 object-cover transition-transform group-hover:scale-105"
-                            onError={(e) => {
-                              (e.target as HTMLImageElement).style.display = 'none';
-                            }}
-                          />
-                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
-                            <ZoomIn className="w-8 h-8 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </ScrollArea>
-          </div>
-        </div>
+        <NewsDetailModal
+          news={selectedNews}
+          onClose={() => setSelectedNews(null)}
+          onZoomImage={setZoomedImage}
+        />
       )}
 
-      {/* 图片放大模态框 */}
+      {/* 图片放大 */}
       {zoomedImage && (
-        <div
-          className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-4"
-          onClick={() => setZoomedImage(null)}
-        >
-          <button
-            className="absolute top-4 right-4 p-3 bg-white/10 hover:bg-white/20 rounded-full transition-colors"
-            onClick={() => setZoomedImage(null)}
-          >
-            <X className="w-6 h-6 text-white" />
-          </button>
-          <img
-            src={zoomedImage}
-            alt="放大图片"
-            className="max-w-full max-h-full object-contain"
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>
+        <ImageLightbox src={zoomedImage} onClose={() => setZoomedImage(null)} />
       )}
     </div>
   );

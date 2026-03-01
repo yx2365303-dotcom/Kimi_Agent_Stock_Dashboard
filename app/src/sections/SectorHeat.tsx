@@ -1,15 +1,18 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import useSWR from 'swr';
 import { cn, formatPercent } from '@/lib/utils';
 import { Card } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Flame, TrendingUp, TrendingDown, Zap, Loader2 } from 'lucide-react';
+import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/ui/sheet';
+import { Flame, TrendingUp, TrendingDown, Zap, Loader2, ChevronRight } from 'lucide-react';
 import {
   fetchSectorHeatBundle,
+  fetchSectorCodeByName,
   type SectorHotData,
   type HotStockData,
-} from '@/services/stockService';
+} from '@/services/sectorService';
+import { SectorMemberPanel } from '@/components/stock/SectorMemberPanel';
 
 // 开盘啦题材数据类型
 interface KplConceptItem {
@@ -53,8 +56,11 @@ function toConcepts(value: unknown): string[] {
   return [];
 }
 
-export function SectorHeat() {
+export function SectorHeat({ onSelectStock }: { onSelectStock?: (tsCode: string) => void } = {}) {
   const [activeTab, setActiveTab] = useState('industry');
+  const [selectedSector, setSelectedSector] = useState<{ code: string; name: string } | null>(null);
+  const [loadingSector, setLoadingSector] = useState<string | null>(null);
+  const sheetOpen = !!selectedSector;
   const { data, isLoading } = useSWR(
     'sector:heat:bundle',
     () => fetchSectorHeatBundle(20),
@@ -131,7 +137,7 @@ export function SectorHeat() {
     if (value >= 3) return 'bg-[#f87171]';
     if (value >= 2) return 'bg-[#fca5a5]';
     if (value >= 1) return 'bg-[#fecaca]';
-    if (value >= 0) return 'bg-slate-300';
+    if (value >= 0) return 'bg-muted';
     if (value >= -1) return 'bg-[#bbf7d0]';
     if (value >= -2) return 'bg-[#86efac]';
     if (value >= -3) return 'bg-[#4ade80]';
@@ -143,12 +149,36 @@ export function SectorHeat() {
     return value >= 0 ? 'text-red-900' : 'text-green-900';
   };
 
+  // 点击板块：热力图标签（只有 name，需反查 ts_code）
+  const handleHeatmapClick = useCallback(async (name: string) => {
+    if (loadingSector) return; // 防止重复点击
+    setLoadingSector(name);
+    try {
+      const code = await fetchSectorCodeByName(name);
+      if (code) {
+        setSelectedSector({ code, name });
+      }
+    } finally {
+      setLoadingSector(null);
+    }
+  }, [loadingSector]);
+
+  // 点击板块行（已有 ts_code）
+  const handleSectorClick = useCallback((code: string, name: string) => {
+    setSelectedSector({ code, name });
+  }, []);
+
+  // Sheet 关闭
+  const handleSheetClose = useCallback((open: boolean) => {
+    if (!open) setSelectedSector(null);
+  }, []);
+
   return (
     <div className="space-y-4">
       {/* 标题 */}
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold text-slate-900">板块热点</h2>
-        <div className="flex items-center gap-2 text-sm text-slate-600">
+        <h2 className="text-xl font-bold text-foreground">板块热点</h2>
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Flame className="w-4 h-4 text-[#ff4d4f]" />
           <span>实时热度排行</span>
         </div>
@@ -156,38 +186,50 @@ export function SectorHeat() {
 
       {/* 热力图 */}
       <Card className="p-4">
-        <h3 className="text-lg font-semibold text-slate-900 mb-4">板块热力图</h3>
+        <h3 className="text-lg font-semibold text-foreground mb-4">板块热力图</h3>
         {loading ? (
           <div className="flex items-center justify-center py-8">
-            <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
-            <span className="ml-2 text-slate-600">加载中...</span>
+            <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+            <span className="ml-2 text-muted-foreground">加载中...</span>
           </div>
         ) : heatmapData.length === 0 ? (
-          <div className="text-center text-slate-500 py-8">暂无数据</div>
+          <div className="text-center text-muted-foreground py-8">暂无数据</div>
         ) : (
           <div className="flex flex-wrap gap-2">
-            {heatmapData.map((item) => (
-              <div
-                key={item.name}
-                className={cn(
-                  'px-3 py-2 rounded-lg cursor-pointer transition-all hover:scale-105',
-                  getHeatColor(item.value),
-                  getTextColor(item.value)
-                )}
-                style={{ fontSize: `${Math.max(12, item.size / 8)}px` }}
-                title={`${item.type === 'industry' ? '行业' : '概念'}板块`}
-              >
-                <div className="font-medium">{item.name}</div>
-                <div className="text-xs opacity-80">{formatPercent(item.value)}</div>
-              </div>
-            ))}
+            {heatmapData.map((item) => {
+              const isSelected = selectedSector?.name === item.name;
+              const isLoading = loadingSector === item.name;
+              return (
+                <div
+                  key={item.name}
+                  className={cn(
+                    'px-3 py-2 rounded-lg cursor-pointer transition-all duration-200',
+                    'hover:scale-105 hover:ring-2 hover:ring-blue-400 hover:shadow-md',
+                    'active:scale-95',
+                    getHeatColor(item.value),
+                    getTextColor(item.value),
+                    isSelected && 'ring-2 ring-blue-500 scale-110 z-10 shadow-lg',
+                    isLoading && 'animate-pulse ring-2 ring-blue-400'
+                  )}
+                  style={{ fontSize: `${Math.max(12, item.size / 8)}px` }}
+                  title={`点击查看「${item.name}」成分股`}
+                  onClick={() => handleHeatmapClick(item.name)}
+                >
+                  <div className="font-medium flex items-center gap-1">
+                    {item.name}
+                    {isLoading && <Loader2 className="w-3 h-3 animate-spin" />}
+                  </div>
+                  <div className="text-xs opacity-80">{formatPercent(item.value)}</div>
+                </div>
+              );
+            })}
           </div>
         )}
       </Card>
 
       {/* Tab切换 */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <TabsList className="w-full justify-start bg-slate-100">
+        <TabsList className="w-full justify-start bg-muted">
           <TabsTrigger value="industry" className="data-[state=active]:bg-white">
             行业板块
           </TabsTrigger>
@@ -205,51 +247,62 @@ export function SectorHeat() {
             <Card className="p-4 self-start">
               <div className="flex items-center gap-2 mb-4">
                 <TrendingUp className="w-5 h-5 text-red-600" />
-                <h3 className="text-lg font-semibold text-slate-900">行业涨幅榜</h3>
+                <h3 className="text-lg font-semibold text-foreground">行业涨幅榜</h3>
               </div>
               {loading ? (
                 <div className="flex items-center justify-center py-8">
-                  <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
+                  <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
                 </div>
               ) : (
                 <div className="space-y-1">
-                  {industryHotList
+                  {[...industryHotList]
                     .sort((a, b) => b.pct_change - a.pct_change)
                     .slice(0, 10)
-                    .map((sector, index) => (
-                      <div
-                        key={sector.ts_code}
-                        className="flex items-center justify-between p-3 rounded-lg bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer"
-                      >
-                        <div className="flex items-center gap-3">
-                          <span className={cn(
-                            'w-6 h-6 flex items-center justify-center text-xs font-bold rounded',
-                            index < 3 ? 'bg-red-100 text-red-700' : 'text-slate-600'
-                          )}>
-                            {index + 1}
-                          </span>
-                          <span className="font-medium text-slate-900">{sector.ts_name}</span>
-                          {sector.hot > 80 && (
-                            <Flame className="w-4 h-4 text-red-600" />
+                    .map((sector, index) => {
+                      const isActive = selectedSector?.code === sector.ts_code;
+                      return (
+                        <div
+                          key={`${sector.ts_code}-up-${index}`}
+                          className={cn(
+                            'flex items-center justify-between p-3 rounded-lg transition-all duration-150 cursor-pointer group',
+                            'hover:bg-accent active:scale-[0.98]',
+                            isActive
+                              ? 'bg-blue-50 dark:bg-blue-950/40 border-l-[3px] border-l-blue-500 pl-[9px]'
+                              : 'bg-muted border-l-[3px] border-l-transparent pl-[9px]'
                           )}
-                        </div>
-                        <div className="flex items-center gap-4">
-                          <div className="text-right">
-                            <div className={cn(
-                              'font-mono font-medium',
-                              sector.pct_change >= 0 ? 'text-[#ff4d4f]' : 'text-green-600'
+                          onClick={() => handleSectorClick(sector.ts_code, sector.ts_name)}
+                        >
+                          <div className="flex items-center gap-3">
+                            <span className={cn(
+                              'w-6 h-6 flex items-center justify-center text-xs font-bold rounded',
+                              index < 3 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400' : 'text-muted-foreground'
                             )}>
-                              {sector.pct_change >= 0 ? '+' : ''}{sector.pct_change.toFixed(2)}%
+                              {index + 1}
+                            </span>
+                            <span className="font-medium text-foreground">{sector.ts_name}</span>
+                            {sector.hot > 80 && (
+                              <Flame className="w-4 h-4 text-red-600" />
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="text-right">
+                              <div className={cn(
+                                'font-mono font-medium',
+                                sector.pct_change >= 0 ? 'text-[#ff4d4f]' : 'text-green-600'
+                              )}>
+                                {sector.pct_change >= 0 ? '+' : ''}{sector.pct_change.toFixed(2)}%
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                热度 {sector.hot}
+                              </div>
                             </div>
-                            <div className="text-xs text-slate-600">
-                              热度 {sector.hot}
-                            </div>
+                            <ChevronRight className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   {industryHotList.length === 0 && (
-                    <div className="text-center text-slate-500 py-4">暂无上涨行业</div>
+                    <div className="text-center text-muted-foreground py-4">暂无上涨行业</div>
                   )}
                 </div>
               )}
@@ -259,48 +312,59 @@ export function SectorHeat() {
             <Card className="p-4 self-start">
               <div className="flex items-center gap-2 mb-4">
                 <TrendingDown className="w-5 h-5 text-green-600" />
-                <h3 className="text-lg font-semibold text-slate-900">行业跌幅榜</h3>
+                <h3 className="text-lg font-semibold text-foreground">行业跌幅榜</h3>
               </div>
               {loading ? (
                 <div className="flex items-center justify-center py-8">
-                  <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
+                  <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
                 </div>
               ) : (
                 <div className="space-y-1">
-                  {industryHotList
+                  {[...industryHotList]
                     .sort((a, b) => a.pct_change - b.pct_change)
                     .slice(0, 10)
-                    .map((sector, index) => (
-                      <div
-                        key={sector.ts_code}
-                        className="flex items-center justify-between p-3 rounded-lg bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer"
-                      >
-                        <div className="flex items-center gap-3">
-                          <span className={cn(
-                            'w-6 h-6 flex items-center justify-center text-xs font-bold rounded',
-                            index < 3 ? 'bg-green-100 text-green-700' : 'text-slate-600'
-                          )}>
-                            {index + 1}
-                          </span>
-                          <span className="font-medium text-slate-900">{sector.ts_name}</span>
-                        </div>
-                        <div className="flex items-center gap-4">
-                          <div className="text-right">
-                            <div className={cn(
-                              'font-mono font-medium',
-                              sector.pct_change >= 0 ? 'text-[#ff4d4f]' : 'text-green-600'
+                    .map((sector, index) => {
+                      const isActive = selectedSector?.code === sector.ts_code;
+                      return (
+                        <div
+                          key={`${sector.ts_code}-down-${index}`}
+                          className={cn(
+                            'flex items-center justify-between p-3 rounded-lg transition-all duration-150 cursor-pointer group',
+                            'hover:bg-accent active:scale-[0.98]',
+                            isActive
+                              ? 'bg-blue-50 dark:bg-blue-950/40 border-l-[3px] border-l-blue-500 pl-[9px]'
+                              : 'bg-muted border-l-[3px] border-l-transparent pl-[9px]'
+                          )}
+                          onClick={() => handleSectorClick(sector.ts_code, sector.ts_name)}
+                        >
+                          <div className="flex items-center gap-3">
+                            <span className={cn(
+                              'w-6 h-6 flex items-center justify-center text-xs font-bold rounded',
+                              index < 3 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400' : 'text-muted-foreground'
                             )}>
-                              {sector.pct_change >= 0 ? '+' : ''}{sector.pct_change.toFixed(2)}%
+                              {index + 1}
+                            </span>
+                            <span className="font-medium text-foreground">{sector.ts_name}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="text-right">
+                              <div className={cn(
+                                'font-mono font-medium',
+                                sector.pct_change >= 0 ? 'text-[#ff4d4f]' : 'text-green-600'
+                              )}>
+                                {sector.pct_change >= 0 ? '+' : ''}{sector.pct_change.toFixed(2)}%
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                热度 {sector.hot}
+                              </div>
                             </div>
-                            <div className="text-xs text-slate-600">
-                              热度 {sector.hot}
-                            </div>
+                            <ChevronRight className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   {industryHotList.length === 0 && (
-                    <div className="text-center text-slate-500 py-4">暂无下跌行业</div>
+                    <div className="text-center text-muted-foreground py-4">暂无下跌行业</div>
                   )}
                 </div>
               )}
@@ -314,51 +378,62 @@ export function SectorHeat() {
             <Card className="p-4 self-start">
               <div className="flex items-center gap-2 mb-4">
                 <TrendingUp className="w-5 h-5 text-red-600" />
-                <h3 className="text-lg font-semibold text-slate-900">概念涨幅榜</h3>
+                <h3 className="text-lg font-semibold text-foreground">概念涨幅榜</h3>
               </div>
               {loading ? (
                 <div className="flex items-center justify-center py-8">
-                  <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
+                  <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
                 </div>
               ) : (
                 <div className="space-y-1">
-                  {conceptHotList
+                  {[...conceptHotList]
                     .sort((a, b) => b.pct_change - a.pct_change)
                     .slice(0, 10)
-                    .map((sector, index) => (
-                      <div
-                        key={sector.ts_code}
-                        className="flex items-center justify-between p-3 rounded-lg bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer"
-                      >
-                        <div className="flex items-center gap-3">
-                          <span className={cn(
-                            'w-6 h-6 flex items-center justify-center text-xs font-bold rounded',
-                            index < 3 ? 'bg-red-100 text-red-700' : 'text-slate-600'
-                          )}>
-                            {index + 1}
-                          </span>
-                          <span className="font-medium text-slate-900">{sector.ts_name}</span>
-                          {sector.hot > 80 && (
-                            <Flame className="w-4 h-4 text-red-600" />
+                    .map((sector, index) => {
+                      const isActive = selectedSector?.code === sector.ts_code;
+                      return (
+                        <div
+                          key={`${sector.ts_code}-up-${index}`}
+                          className={cn(
+                            'flex items-center justify-between p-3 rounded-lg transition-all duration-150 cursor-pointer group',
+                            'hover:bg-accent active:scale-[0.98]',
+                            isActive
+                              ? 'bg-blue-50 dark:bg-blue-950/40 border-l-[3px] border-l-blue-500 pl-[9px]'
+                              : 'bg-muted border-l-[3px] border-l-transparent pl-[9px]'
                           )}
-                        </div>
-                        <div className="flex items-center gap-4">
-                          <div className="text-right">
-                            <div className={cn(
-                              'font-mono font-medium',
-                              sector.pct_change >= 0 ? 'text-[#ff4d4f]' : 'text-green-600'
+                          onClick={() => handleSectorClick(sector.ts_code, sector.ts_name)}
+                        >
+                          <div className="flex items-center gap-3">
+                            <span className={cn(
+                              'w-6 h-6 flex items-center justify-center text-xs font-bold rounded',
+                              index < 3 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400' : 'text-muted-foreground'
                             )}>
-                              {sector.pct_change >= 0 ? '+' : ''}{sector.pct_change.toFixed(2)}%
+                              {index + 1}
+                            </span>
+                            <span className="font-medium text-foreground">{sector.ts_name}</span>
+                            {sector.hot > 80 && (
+                              <Flame className="w-4 h-4 text-red-600" />
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="text-right">
+                              <div className={cn(
+                                'font-mono font-medium',
+                                sector.pct_change >= 0 ? 'text-[#ff4d4f]' : 'text-green-600'
+                              )}>
+                                {sector.pct_change >= 0 ? '+' : ''}{sector.pct_change.toFixed(2)}%
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                热度 {sector.hot}
+                              </div>
                             </div>
-                            <div className="text-xs text-slate-600">
-                              热度 {sector.hot}
-                            </div>
+                            <ChevronRight className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   {conceptHotList.length === 0 && (
-                    <div className="text-center text-slate-500 py-4">暂无上涨概念</div>
+                    <div className="text-center text-muted-foreground py-4">暂无上涨概念</div>
                   )}
                 </div>
               )}
@@ -368,48 +443,59 @@ export function SectorHeat() {
             <Card className="p-4 self-start">
               <div className="flex items-center gap-2 mb-4">
                 <TrendingDown className="w-5 h-5 text-green-600" />
-                <h3 className="text-lg font-semibold text-slate-900">概念跌幅榜</h3>
+                <h3 className="text-lg font-semibold text-foreground">概念跌幅榜</h3>
               </div>
               {loading ? (
                 <div className="flex items-center justify-center py-8">
-                  <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
+                  <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
                 </div>
               ) : (
                 <div className="space-y-1">
-                  {conceptHotList
+                  {[...conceptHotList]
                     .sort((a, b) => a.pct_change - b.pct_change)
                     .slice(0, 10)
-                    .map((sector, index) => (
-                      <div
-                        key={sector.ts_code}
-                        className="flex items-center justify-between p-3 rounded-lg bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer"
-                      >
-                        <div className="flex items-center gap-3">
-                          <span className={cn(
-                            'w-6 h-6 flex items-center justify-center text-xs font-bold rounded',
-                            index < 3 ? 'bg-green-100 text-green-700' : 'text-slate-600'
-                          )}>
-                            {index + 1}
-                          </span>
-                          <span className="font-medium text-slate-900">{sector.ts_name}</span>
-                        </div>
-                        <div className="flex items-center gap-4">
-                          <div className="text-right">
-                            <div className={cn(
-                              'font-mono font-medium',
-                              sector.pct_change >= 0 ? 'text-[#ff4d4f]' : 'text-green-600'
+                    .map((sector, index) => {
+                      const isActive = selectedSector?.code === sector.ts_code;
+                      return (
+                        <div
+                          key={`${sector.ts_code}-down-${index}`}
+                          className={cn(
+                            'flex items-center justify-between p-3 rounded-lg transition-all duration-150 cursor-pointer group',
+                            'hover:bg-accent active:scale-[0.98]',
+                            isActive
+                              ? 'bg-blue-50 dark:bg-blue-950/40 border-l-[3px] border-l-blue-500 pl-[9px]'
+                              : 'bg-muted border-l-[3px] border-l-transparent pl-[9px]'
+                          )}
+                          onClick={() => handleSectorClick(sector.ts_code, sector.ts_name)}
+                        >
+                          <div className="flex items-center gap-3">
+                            <span className={cn(
+                              'w-6 h-6 flex items-center justify-center text-xs font-bold rounded',
+                              index < 3 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400' : 'text-muted-foreground'
                             )}>
-                              {sector.pct_change >= 0 ? '+' : ''}{sector.pct_change.toFixed(2)}%
+                              {index + 1}
+                            </span>
+                            <span className="font-medium text-foreground">{sector.ts_name}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="text-right">
+                              <div className={cn(
+                                'font-mono font-medium',
+                                sector.pct_change >= 0 ? 'text-[#ff4d4f]' : 'text-green-600'
+                              )}>
+                                {sector.pct_change >= 0 ? '+' : ''}{sector.pct_change.toFixed(2)}%
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                热度 {sector.hot}
+                              </div>
                             </div>
-                            <div className="text-xs text-slate-600">
-                              热度 {sector.hot}
-                            </div>
+                            <ChevronRight className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   {conceptHotList.length === 0 && (
-                    <div className="text-center text-slate-500 py-4">暂无下跌概念</div>
+                    <div className="text-center text-muted-foreground py-4">暂无下跌概念</div>
                   )}
                 </div>
               )}
@@ -420,29 +506,29 @@ export function SectorHeat() {
           <Card className="p-4 mt-4">
             <div className="flex items-center gap-2 mb-4">
               <Flame className="w-5 h-5 text-orange-500" />
-              <h3 className="text-lg font-semibold text-slate-900">同花顺热股榜</h3>
+              <h3 className="text-lg font-semibold text-foreground">同花顺热股榜</h3>
             </div>
             {loading ? (
               <div className="flex items-center justify-center py-8">
-                <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
+                <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
               </div>
             ) : (
               <ScrollArea className="h-80">
                 <div className="space-y-2">
                   {hotStockList.map((stock, index) => (
                     <div
-                      key={stock.ts_code}
-                      className="flex items-center justify-between p-3 rounded-lg bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer"
+                      key={`${stock.ts_code}-${index}`}
+                      className="flex items-center justify-between p-3 rounded-lg bg-muted hover:bg-muted transition-colors cursor-pointer"
                     >
                       <div className="flex items-center gap-3">
                         <span className={cn(
                           'w-6 h-6 flex items-center justify-center text-xs font-bold rounded',
-                          index < 3 ? 'bg-orange-100 text-orange-700' : 'text-slate-600'
+                          index < 3 ? 'bg-orange-100 text-orange-700' : 'text-muted-foreground'
                         )}>
                           {index + 1}
                         </span>
                         <div>
-                          <span className="font-medium text-slate-900">{stock.ts_name}</span>
+                          <span className="font-medium text-foreground">{stock.ts_name}</span>
                           <div className="flex flex-wrap gap-1 mt-1">
                             {stock.concepts.slice(0, 3).map((concept, i) => (
                               <span key={i} className="px-1.5 py-0.5 text-xs bg-blue-50 text-blue-600 rounded">
@@ -459,14 +545,14 @@ export function SectorHeat() {
                         )}>
                           {stock.pct_change >= 0 ? '+' : ''}{stock.pct_change.toFixed(2)}%
                         </div>
-                        <div className="text-xs text-slate-600">
+                        <div className="text-xs text-muted-foreground">
                           热度 {stock.hot}
                         </div>
                       </div>
                     </div>
                   ))}
                   {hotStockList.length === 0 && (
-                    <div className="text-center text-slate-500 py-4">暂无热股数据</div>
+                    <div className="text-center text-muted-foreground py-4">暂无热股数据</div>
                   )}
                 </div>
               </ScrollArea>
@@ -478,29 +564,29 @@ export function SectorHeat() {
           <Card className="p-4">
             <div className="flex items-center gap-2 mb-4">
               <Zap className="w-5 h-5 text-yellow-400" />
-              <h3 className="text-lg font-semibold text-slate-900">开盘啦题材</h3>
+              <h3 className="text-lg font-semibold text-foreground">开盘啦题材</h3>
             </div>
             {loading ? (
               <div className="flex items-center justify-center py-8">
-                <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
+                <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
               </div>
             ) : (
               <ScrollArea className="h-96">
                 <div className="space-y-2">
                   {kplConcepts.map((concept, index) => (
                     <div
-                      key={concept.name}
-                      className="p-4 rounded-lg bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer"
+                      key={`${concept.name}-${index}`}
+                      className="p-4 rounded-lg bg-muted hover:bg-muted transition-colors cursor-pointer"
                     >
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-3">
                           <span className={cn(
                             'w-8 h-8 flex items-center justify-center text-sm font-bold rounded-lg',
-                            index < 3 ? 'bg-yellow-100 text-yellow-700' : 'bg-slate-200 text-slate-600'
+                            index < 3 ? 'bg-yellow-100 text-yellow-700' : 'bg-border text-muted-foreground'
                           )}>
                             {index + 1}
                           </span>
-                          <span className="text-lg font-medium text-slate-900">{concept.name}</span>
+                          <span className="text-lg font-medium text-foreground">{concept.name}</span>
                           <div className="flex items-center gap-1">
                             <Flame className="w-4 h-4 text-red-600" />
                             <span className="text-sm text-red-600">{concept.heat_score || 0}</span>
@@ -509,18 +595,18 @@ export function SectorHeat() {
                         <div className="flex items-center gap-4">
                           <div className="text-center">
                             <div className="text-2xl font-bold text-[#ff4d4f] font-mono">{concept.limit_up_count || 0}</div>
-                            <div className="text-xs text-slate-600">涨停</div>
+                            <div className="text-xs text-muted-foreground">涨停</div>
                           </div>
                           <div className="text-center">
-                            <div className="text-2xl font-bold text-slate-900 font-mono">{concept.up_count || 0}</div>
-                            <div className="text-xs text-slate-600">上涨</div>
+                            <div className="text-2xl font-bold text-foreground font-mono">{concept.up_count || 0}</div>
+                            <div className="text-xs text-muted-foreground">上涨</div>
                           </div>
                         </div>
                       </div>
                       {concept.leading_stock && (
                         <div className="flex items-center gap-2 pl-11">
-                          <span className="text-sm text-slate-600">龙头股:</span>
-                          <span className="text-sm font-medium text-slate-900">{concept.leading_stock}</span>
+                          <span className="text-sm text-muted-foreground">龙头股:</span>
+                          <span className="text-sm font-medium text-foreground">{concept.leading_stock}</span>
                           {concept.leading_change && (
                             <span className={cn(
                               'text-sm font-mono',
@@ -534,7 +620,7 @@ export function SectorHeat() {
                     </div>
                   ))}
                   {kplConcepts.length === 0 && (
-                    <div className="text-center text-slate-500 py-8">暂无开盘啦题材数据</div>
+                    <div className="text-center text-muted-foreground py-8">暂无开盘啦题材数据</div>
                   )}
                 </div>
               </ScrollArea>
@@ -542,6 +628,30 @@ export function SectorHeat() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* 板块成分股 — 右侧滑出抽屉 */}
+      <Sheet open={sheetOpen} onOpenChange={handleSheetClose}>
+        <SheetContent
+          side="right"
+          className="w-[95vw] sm:w-[880px] sm:max-w-[880px] p-0 gap-0 overflow-hidden"
+        >
+          {/* 无障碍标题和描述（视觉隐藏） */}
+          <SheetTitle className="sr-only">
+            {selectedSector?.name ?? '板块'} 成分股
+          </SheetTitle>
+          <SheetDescription className="sr-only">
+            查看{selectedSector?.name ?? '板块'}的成分股列表
+          </SheetDescription>
+          {selectedSector && (
+            <SectorMemberPanel
+              sectorCode={selectedSector.code}
+              sectorName={selectedSector.name}
+              onClose={() => setSelectedSector(null)}
+              onSelectStock={onSelectStock}
+            />
+          )}
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

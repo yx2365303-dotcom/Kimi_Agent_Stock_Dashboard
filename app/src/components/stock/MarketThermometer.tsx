@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { cn } from '@/lib/utils';
 import { TrendingUp, TrendingDown } from 'lucide-react';
 
@@ -11,7 +12,7 @@ interface MarketThermometerProps {
     className?: string;
 }
 
-export function MarketThermometer({
+export const MarketThermometer = memo(function MarketThermometer({
     upCount,
     downCount,
     flatCount,
@@ -27,10 +28,10 @@ export function MarketThermometer({
     return (
         <div className={cn('p-4', className)}>
             {/* 标题 */}
-            <div className="text-sm font-medium text-slate-500 mb-3">市场温度</div>
+            <div className="text-sm font-medium text-muted-foreground mb-3">市场温度</div>
 
             {/* 涨跌对比条 */}
-            <div className="relative h-8 rounded-full overflow-hidden bg-slate-100 mb-3">
+            <div className="relative h-8 rounded-full overflow-hidden bg-muted mb-3">
                 <div
                     className="absolute left-0 top-0 h-full bg-gradient-to-r from-red-500 to-red-400 transition-all duration-500"
                     style={{ width: `${upPercent}%` }}
@@ -41,7 +42,7 @@ export function MarketThermometer({
                 />
                 {/* 中间分隔 */}
                 <div
-                    className="absolute top-0 h-full w-1 bg-white shadow-sm transition-all duration-500"
+                    className="absolute top-0 h-full w-1 bg-background shadow-sm transition-all duration-500"
                     style={{ left: `calc(${upPercent}% - 2px)` }}
                 />
                 {/* 数值标签 */}
@@ -53,10 +54,10 @@ export function MarketThermometer({
 
             {/* 涨跌比 */}
             <div className="flex items-center justify-center gap-2 mb-4">
-                <span className="text-sm text-slate-600">涨跌比</span>
+                <span className="text-sm text-muted-foreground">涨跌比</span>
                 <span className={cn(
                     'text-lg font-bold font-mono',
-                    upRatio > 50 ? 'text-red-500' : upRatio < 50 ? 'text-green-500' : 'text-slate-500'
+                    upRatio > 50 ? 'text-red-500' : upRatio < 50 ? 'text-green-500' : 'text-muted-foreground'
                 )}>
                     {upRatio}%
                 </span>
@@ -73,29 +74,29 @@ export function MarketThermometer({
                 <div className="flex flex-col items-center p-2 rounded-lg bg-red-50">
                     <div className="flex items-center gap-1">
                         <span className="w-2 h-2 rounded-full bg-red-500"></span>
-                        <span className="text-xs text-slate-500">涨停</span>
+                        <span className="text-xs text-muted-foreground">涨停</span>
                     </div>
                     <span className="text-lg font-bold text-red-500 font-mono">{limitUp}</span>
                 </div>
 
                 {/* 平盘 */}
-                <div className="flex flex-col items-center p-2 rounded-lg bg-slate-50">
+                <div className="flex flex-col items-center p-2 rounded-lg bg-muted">
                     <div className="flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-slate-400"></span>
-                        <span className="text-xs text-slate-500">平盘</span>
+                        <span className="w-2 h-2 rounded-full bg-muted-foreground"></span>
+                        <span className="text-xs text-muted-foreground">平盘</span>
                     </div>
-                    <span className="text-lg font-bold text-slate-500 font-mono">{flatCount}</span>
+                    <span className="text-lg font-bold text-muted-foreground font-mono">{flatCount}</span>
                 </div>
 
                 {/* 跌停 */}
                 <div className="flex flex-col items-center p-2 rounded-lg bg-green-50">
                     <div className="flex items-center gap-1">
                         <span className="w-2 h-2 rounded-full bg-green-500"></span>
-                        <span className="text-xs text-slate-500">跌停</span>
+                        <span className="text-xs text-muted-foreground">跌停</span>
                     </div>
                     <span className="text-lg font-bold text-green-500 font-mono">{limitDown}</span>
                 </div>
             </div>
         </div>
     );
-}
+});
